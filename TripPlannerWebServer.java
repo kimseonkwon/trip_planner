@@ -48,29 +48,43 @@ public class TripPlannerWebServer {
                         <script>
                             let map = null;
                             let markers = [];
+                            let polyline = null;
+
                             kakao.maps.load(() => {
                                 map = new kakao.maps.Map(document.getElementById('map'), {
                                     center: new kakao.maps.LatLng(35.1795, 129.0756), level: 8
                                 });
                             });
+
                             async function generatePlan() {
                                 const p = document.getElementById('prompt').value;
                                 if(!p) return;
                                 document.getElementById('loader').style.display = 'block';
                                 document.getElementById('planOutput').style.display = 'none';
+                                
+                                // 기존 요소 제거
                                 markers.forEach(m => m.setMap(null)); markers = [];
+                                if (polyline) { polyline.setMap(null); }
+
                                 try {
                                     const res = await fetch('/api/plan', {
                                         method: 'POST', body: 'prompt=' + encodeURIComponent(p),
                                         headers: {'Content-Type': 'application/x-www-form-urlencoded'}
                                     });
                                     const resultText = await res.text();
+                                    
                                     if(resultText.includes('===MAP_DATA===')) {
-                                        const parts = resultText.split('===MAP_DATA===');
-                                        document.getElementById('planOutput').innerText = parts[0].trim();
-                                        const data = JSON.parse(parts[1].trim());
+                                        const mainParts = resultText.split('===MAP_DATA===');
+                                        document.getElementById('planOutput').innerText = mainParts[0].trim();
+                                        
+                                        const dataParts = mainParts[1].split('===PATH_DATA===');
+                                        const markerData = JSON.parse(dataParts[0].trim());
+                                        const pathData = JSON.parse(dataParts[1].trim());
+
                                         const bounds = new kakao.maps.LatLngBounds();
-                                        data.forEach(item => {
+                                        
+                                        // 1. 마커 생성
+                                        markerData.forEach(item => {
                                             const pos = new kakao.maps.LatLng(item.lat, item.lng);
                                             const marker = new kakao.maps.Marker({position: pos, map: map});
                                             markers.push(marker); bounds.extend(pos);
@@ -78,8 +92,22 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseover', () => iw.open(map, marker));
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
-                                        if (data.length > 0) map.setBounds(bounds);
-                                    } else { document.getElementById('planOutput').innerText = resultText; }
+
+                                        // 2. 동선 선(Polyline) 그리기
+                                        const linePath = pathData.map(p => new kakao.maps.LatLng(p.lat, p.lng));
+                                        polyline = new kakao.maps.Polyline({
+                                            path: linePath,
+                                            strokeWeight: 5,
+                                            strokeColor: '#FF3366',
+                                            strokeOpacity: 0.8,
+                                            strokeStyle: 'solid'
+                                        });
+                                        polyline.setMap(map);
+
+                                        if (markerData.length > 0) map.setBounds(bounds);
+                                    } else {
+                                        document.getElementById('planOutput').innerText = resultText;
+                                    }
                                     document.getElementById('planOutput').style.display = 'block';
                                 } catch(e) { alert("Error: " + e.message); }
                                 finally { document.getElementById('loader').style.display = 'none'; }

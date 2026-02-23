@@ -1461,11 +1461,9 @@ def react_decision_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # In[140]:
 
 
-
-# 거리 계산 보조 함수 (Haversine 공식)
 def calculate_distance(lat1, lon1, lat2, lon2):
     try:
-        R = 6371  
+        R = 6371  # 지구 반지름 (km)
         dlat = math.radians(float(lat2) - float(lat1))
         dlon = math.radians(float(lon2) - float(lon1))
         a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(math.radians(float(lat1))) \
@@ -1474,12 +1472,123 @@ def calculate_distance(lat1, lon1, lat2, lon2):
         return R * c
     except:
         return 0
-
-
-
-
-
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    print("\n🎉 [Planner] 최적 동선 알고리즘 가동 및 최종 여행 계획 확정!")
+
+    c = state.get("constraints", {})
+    dest = c.get("destination", "부산")
+    budget = c.get("budget_total", 0)
+    people = c.get("people", 1)
+
+    # 1. 데이터 추출 (복사본을 만들어 원본 데이터 보존)
+    transport = state.get("transport", {}).get("selected", {})
+    lodging = state.get("lodging", {}).get("selected", {})
+    all_foods = state.get("food", {}).get("selected_list", [])[:]
+    all_attractions = state.get("attractions", {}).get("selected_list", [])[:]
+    
+    # 타임라인 조립용 임시 리스트
+    foods_temp = all_foods[:]
+    attrs_temp = all_attractions[:]
+
+    integrated = state.get("integrated", {})
+    total_cost = integrated.get("total_cost", 0)
+    
+    # 정확한 비용 합산
+    food_total = sum(f.get("estimated_cost", 0) for f in all_foods) * people
+    attraction_total = sum(a.get("estimated_cost", 0) for a in all_attractions) * people
+
+    # 2. 동선 추적을 위한 리스트
+    ordered_path = []
+    def add_to_path(item):
+        if item and item.get('x') and item.get('y'):
+            ordered_path.append({"lat": float(item['y']), "lng": float(item['x'])})
+
+    # 최단 거리 탐색 헬퍼
+    def get_nearest(current_loc, candidates):
+        if not candidates: return None
+        if current_loc and 'y' in current_loc and 'y' in candidates[0]:
+            candidates.sort(key=lambda item: calculate_distance(current_loc['y'], current_loc['x'], item['y'], item['x']))
+        return candidates.pop(0)
+
+    current_location = {} 
+    timeline = []
+
+    # --- [타임라인 조립] ---
+    timeline.append("🌴 [1일차]")
+    timeline.append(f"  🕒 10:00 | 🚄 {dest} 도착 및 시작 ({transport.get('name', '교통편')})")
+    
+    f1 = get_nearest(current_location, foods_temp)
+    if f1: 
+        timeline.append(f"  🕒 11:30 | 🍽️ 식사: {f1['name']}"); 
+        current_location = f1; add_to_path(f1)
+        
+    a1 = get_nearest(current_location, attrs_temp)
+    if a1: 
+        timeline.append(f"  🕒 14:00 | 🎡 관광: {a1['name']}"); 
+        current_location = a1; add_to_path(a1)
+        
+    f2 = get_nearest(current_location, foods_temp)
+    if f2: 
+        timeline.append(f"  🕒 18:00 | 🍽️ 식사: {f2['name']}"); 
+        current_location = f2; add_to_path(f2)
+    
+    timeline.append(f"  🕒 20:00 | 🏨 숙소 체크인: {lodging.get('name', '숙소')}")
+    current_location = lodging; add_to_path(lodging)
+
+    timeline.append("")
+    timeline.append("🌅 [2일차]")
+    timeline.append(f"  🕒 10:00 | 🏨 숙소 체크아웃")
+    
+    f3 = get_nearest(current_location, foods_temp)
+    if f3: 
+        timeline.append(f"  🕒 11:30 | 🍽️ 식사: {f3['name']}"); 
+        current_location = f3; add_to_path(f3)
+        
+    a2 = get_nearest(current_location, attrs_temp)
+    if a2: 
+        timeline.append(f"  🕒 14:00 | 🎡 관광: {a2['name']}"); 
+        current_location = a2; add_to_path(a2)
+        
+    f4 = get_nearest(current_location, foods_temp)
+    if f4: 
+        timeline.append(f"  🕒 17:00 | 🍽️ 식사: {f4['name']}"); add_to_path(f4)
+
+    # 3. 결과 텍스트 생성
+    plan_text = f"""
+==========================================
+✈️  {dest} 완벽 여행 플랜 (타임라인 기반)
+==========================================
+💰 총 예상 비용: {total_cost:,}원 (예산: {budget:,}원)
+
+[예상 지출 내역 요약]
+- 교통: {integrated.get('breakdown', {}).get('transport', {}).get('desc', '0원')}
+- 숙소: {lodging.get('name', '')} ({lodging.get('estimated_cost', 0):,}원)
+- 식비: 총 {food_total:,}원
+- 관광: 총 {attraction_total:,}원
+
+==========================================
+🗺️ 추천 여행 동선 (거리 기반 최적화)
+==========================================
+"""
+    plan_text += "\n".join(timeline)
+    plan_text += "\n=========================================="
+
+    print(plan_text)
+
+    # 4. 지도 마커 및 경로 데이터 출력
+    map_data = []
+    if lodging.get('x'): map_data.append({"name": lodging['name'], "type": "🏨 숙소", "lat": float(lodging['y']), "lng": float(lodging['x'])})
+    for f in all_foods:
+        if f.get('x'): map_data.append({"name": f['name'], "type": "🍽️ 맛집", "lat": float(f['y']), "lng": float(f['x'])})
+    for a in all_attractions:
+        if a.get('x'): map_data.append({"name": a['name'], "type": "🎡 관광지", "lat": float(a['y']), "lng": float(a['x'])})
+
+    print("===MAP_DATA===")
+    print(json.dumps(map_data, ensure_ascii=False))
+    print("===PATH_DATA===")
+    print(json.dumps(ordered_path, ensure_ascii=False))
+
+    return {"react_decision": "done"}
     print("\n🎉 [Planner] 최적 동선 알고리즘 가동 및 최종 여행 계획 확정!")
 
     c = state.get("constraints", {})
