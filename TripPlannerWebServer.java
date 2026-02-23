@@ -13,7 +13,6 @@ public class TripPlannerWebServer {
         int port = 8080;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         
-        // 1. 프론트엔드 UI (HTML/CSS/JS) 제공
         server.createContext("/", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
@@ -23,48 +22,65 @@ public class TripPlannerWebServer {
                     <head>
                         <meta charset="UTF-8">
                         <title>AI 부산 여행 플래너</title>
+                        <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=6deb6ae8b97d2bfd8b8e9697b733bae5&libraries=services&autoload=false"></script>
                         <style>
-                            body { font-family: 'Pretendard', sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; padding: 50px; }
-                            .container { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 100%; max-width: 650px; }
-                            h1 { text-align: center; color: #2c3e50; margin-bottom: 30px; }
-                            .input-group { margin-bottom: 20px; }
-                            input { width: 100%; padding: 15px; border-radius: 8px; border: 1px solid #ddd; font-size: 16px; box-sizing: border-box; transition: 0.3s; }
-                            input:focus { border-color: #007bff; outline: none; box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
-                            button { width: 100%; padding: 15px; background-color: #007bff; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; transition: 0.3s; }
-                            button:hover { background-color: #0056b3; }
-                            .loader { display: none; text-align: center; margin-top: 30px; font-size: 16px; font-weight: bold; color: #007bff; }
-                            .spinner { display: inline-block; width: 30px; height: 30px; border: 4px solid rgba(0,123,255,0.3); border-radius: 50%; border-top-color: #007bff; animation: spin 1s ease-in-out infinite; margin-bottom: 10px; }
-                            @keyframes spin { to { transform: rotate(360deg); } }
-                            #result { display: none; margin-top: 30px; border-top: 2px dashed #eee; padding-top: 20px; }
-                            pre { background: #f8f9fa; padding: 20px; border-radius: 12px; white-space: pre-wrap; word-wrap: break-word; font-size: 15px; color: #333; line-height: 1.6; }
+                            body { font-family: 'Pretendard', sans-serif; background-color: #f4f7f6; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+                            header { background: white; padding: 15px 25px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; }
+                            .main-container { display: flex; flex: 1; overflow: hidden; }
+                            
+                            /* 왼쪽: 계획 정보 */
+                            .side-panel { width: 420px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 20px; overflow-y: auto; }
+                            .input-box { margin-bottom: 20px; }
+                            input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; box-sizing: border-box; }
+                            button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+                            
+                            /* 오른쪽: 지도 */
+                            .map-panel { flex: 1; position: relative; background: #e5e3df; }
+                            #map { width: 100%; height: 100%; }
+
+                            .loader { display: none; text-align: center; margin: 15px 0; font-weight: bold; color: #007bff; }
+                            #planOutput { white-space: pre-wrap; font-size: 14px; color: #333; line-height: 1.6; border-top: 1px solid #eee; padding-top: 20px; }
                         </style>
                     </head>
                     <body>
-                        <div class="container">
-                            <h1>✈️ AI 맞춤형 여행 플래너</h1>
-                            <div class="input-group">
-                                <input type="text" id="prompt" placeholder="예: 부산 1박 2일 예산 40만원 자연 명소 위주로 짜줘" />
+                        <header><h2>✈️ AI 여행 동선 플래너</h2></header>
+                        <div class="main-container">
+                            <div class="side-panel">
+                                <div class="input-box">
+                                    <input type="text" id="prompt" placeholder="부산 1박 2일 자연 여행 (예산 50만)" />
+                                    <button onclick="generatePlan()">계획 생성하기</button>
+                                </div>
+                                <div class="loader" id="loader">⏳ AI가 동선을 계산 중입니다...</div>
+                                <div id="planOutput">여행지를 입력하면 최적의 경로가 이곳에 나타납니다.</div>
                             </div>
-                            <button onclick="generatePlan()">최적 동선 생성하기</button>
-                            
-                            <div class="loader" id="loader">
-                                <div class="spinner"></div><br>
-                                AI가 거리를 계산하여 최적의 동선을 짜고 있습니다... ⏳
-                            </div>
-                            
-                            <div id="result">
-                                <pre id="planOutput"></pre>
+                            <div class="map-panel">
+                                <div id="map"></div>
                             </div>
                         </div>
 
                         <script>
+                            let map = null;
+                            let markers = [];
+
+                            // 🌟 페이지가 열리자마자 지도를 즉시 로드합니다.
+                            kakao.maps.load(function() {
+                                const container = document.getElementById('map');
+                                const options = {
+                                    center: new kakao.maps.LatLng(35.1795543, 129.0756416), // 부산 중심
+                                    level: 8
+                                };
+                                map = new kakao.maps.Map(container, options);
+                                console.log("카카오 지도 로드 완료");
+                            });
+
                             async function generatePlan() {
                                 const prompt = document.getElementById('prompt').value;
-                                if(!prompt) { alert("여행 조건을 입력해주세요!"); return; }
-                                
+                                if(!prompt) return;
+
                                 document.getElementById('loader').style.display = 'block';
-                                document.getElementById('result').style.display = 'none';
-                                
+                                document.getElementById('planOutput').innerText = "";
+                                clearMarkers();
+
                                 try {
                                     const response = await fetch('/api/plan', {
                                         method: 'POST',
@@ -72,13 +88,44 @@ public class TripPlannerWebServer {
                                         body: 'prompt=' + encodeURIComponent(prompt)
                                     });
                                     const text = await response.text();
-                                    document.getElementById('planOutput').innerText = text;
-                                    document.getElementById('result').style.display = 'block';
+
+                                    if(text.includes('===MAP_DATA===')) {
+                                        const parts = text.split('===MAP_DATA===');
+                                        document.getElementById('planOutput').innerText = parts[0].trim();
+                                        const mapData = JSON.parse(parts[1].trim());
+                                        addMarkers(mapData);
+                                    } else {
+                                        document.getElementById('planOutput').innerText = text;
+                                    }
                                 } catch(e) {
                                     alert("에러가 발생했습니다: " + e.message);
                                 } finally {
                                     document.getElementById('loader').style.display = 'none';
                                 }
+                            }
+
+                            function addMarkers(data) {
+                                if(!map) return;
+                                const bounds = new kakao.maps.LatLngBounds();
+                                
+                                data.forEach(p => {
+                                    const pos = new kakao.maps.LatLng(p.lat, p.lng);
+                                    const marker = new kakao.maps.Marker({ position: pos, map: map });
+                                    markers.push(marker);
+                                    bounds.extend(pos);
+
+                                    const infowindow = new kakao.maps.InfoWindow({
+                                        content: '<div style="padding:5px;font-size:12px;font-weight:bold;">' + p.name + '</div>'
+                                    });
+                                    kakao.maps.event.addListener(marker, 'mouseover', () => infowindow.open(map, marker));
+                                    kakao.maps.event.addListener(marker, 'mouseout', () => infowindow.close());
+                                });
+                                map.setBounds(bounds);
+                            }
+
+                            function clearMarkers() {
+                                markers.forEach(m => m.setMap(null));
+                                markers = [];
                             }
                         </script>
                     </body>
@@ -93,7 +140,7 @@ public class TripPlannerWebServer {
             }
         });
 
-        // 2. API 엔드포인트: 파이썬 스크립트 실행 및 결과 반환
+        // API 연동 (파이썬 호출)
         server.createContext("/api/plan", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
@@ -116,37 +163,31 @@ public class TripPlannerWebServer {
         });
 
         server.setExecutor(null);
-        System.out.println("🚀 웹 서버가 시작되었습니다. 브라우저에서 접속하세요: http://localhost:" + port);
+        System.out.println("🚀 웹 서버 가동: http://localhost:8080");
         server.start();
     }
 
     private static String runPythonPlanner(String prompt) {
         try {
-            // 운영체제 환경에 따라 "python" 또는 "python3"로 변경
-            // 사용하시는 anaconda3 가상환경의 절대 경로를 직접 지정해 줍니다.
+            // 🚨 선권님의 아나콘다 가상환경 파이썬 경로를 다시 확인해 주세요!
             String pythonPath = "/Users/seon/anaconda3/envs/trip_planner/bin/python";
             ProcessBuilder pb = new ProcessBuilder(pythonPath, "trip_planner.py", prompt);
             pb.redirectErrorStream(true);
             Process process = pb.start();
 
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
             StringBuilder output = new StringBuilder();
             String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
+            while ((line = reader.readLine()) != null) { output.append(line).append("\\n"); }
             process.waitFor();
 
             String fullLog = output.toString();
-            
-            // 파이썬 터미널 로그 중 사용자에게 보여줄 '최종 타임라인' 영역만 잘라서 반환
             if (fullLog.contains("🎉 [Planner]")) {
                 return fullLog.substring(fullLog.indexOf("🎉 [Planner]"));
             }
             return fullLog;
         } catch (Exception e) {
-            return "실행 중 서버 에러 발생: " + e.getMessage();
+            return "서버 오류: " + e.getMessage();
         }
     }
 }

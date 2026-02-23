@@ -1475,28 +1475,30 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     except:
         return 0
 
+
+
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     print("\n🎉 [Planner] 최적 동선 알고리즘 가동 및 최종 여행 계획 확정!")
-    
+
     c = state.get("constraints", {})
     dest = c.get("destination", "부산")
     budget = c.get("budget_total", 0)
     people = c.get("people", 1)
-    
-    # 1. 데이터 추출
+
+    # 1. 데이터 추출 및 복사
     transport = state.get("transport", {}).get("selected", {})
     lodging = state.get("lodging", {}).get("selected", {})
     foods = state.get("food", {}).get("selected_list", [])[:]
     attractions = state.get("attractions", {}).get("selected_list", [])[:]
-    
+
     integrated = state.get("integrated", {})
     total_cost = integrated.get("total_cost", 0)
-    
-    # 🌟 [해결 포인트] 누락 방지를 위해 planner에서 직접 1인당 가격을 모두 합산 후 인원수를 곱합니다!
+
+    # 🌟 [비용 계산 버그 수정] 리스트에서 직접 금액 합산 (1인당 금액 * 인원수)
     food_total = sum(f.get("estimated_cost", 0) for f in foods) * people
     attraction_total = sum(a.get("estimated_cost", 0) for a in attractions) * people
-    
-    # 2. 그리디 탐색을 위한 헬퍼 함수
+
+    # 2. 그리디 탐색 (거리 기반 정렬)
     def get_nearest(current_loc, candidates):
         if not candidates: return None
         if current_loc and 'y' in current_loc and 'y' in candidates[0]:
@@ -1504,77 +1506,69 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return candidates.pop(0)
 
     current_location = {} 
-    
-    # 3. 타임라인(일정표) 조립 로직
     timeline = []
-    
+
     # --- [1일차] ---
     timeline.append("🌴 [1일차]")
     timeline.append(f"  🕒 10:00 | 🚄 {dest} 도착 및 여행 시작 ({transport.get('name', '교통편')})")
     
-    f1 = get_nearest(current_location, foods)
-    if f1:
-        timeline.append(f"  🕒 11:30 | 🍽️ 점심 식사: {f1['name']} ({f1.get('type', '맛집')})")
-        current_location = f1
-        
-    a1 = get_nearest(current_location, attractions)
-    if a1:
-        timeline.append(f"  🕒 14:00 | 🎡 오후 관광: {a1['name']} ({a1.get('type', '관광지')})")
-        current_location = a1
-        
-    f2 = get_nearest(current_location, foods)
-    if f2:
-        timeline.append(f"  🕒 18:00 | 🍽️ 저녁 식사: {f2['name']} ({f2.get('type', '맛집')})")
-        current_location = f2
-        
+    f1 = get_nearest(current_location, foods); 
+    if f1: timeline.append(f"  🕒 11:30 | 🍽️ 점심 식사: {f1['name']} ({f1.get('type', '맛집')})"); current_location = f1
+    a1 = get_nearest(current_location, attractions); 
+    if a1: timeline.append(f"  🕒 14:00 | 🎡 오후 관광: {a1['name']} ({a1.get('type', '관광지')})"); current_location = a1
+    f2 = get_nearest(current_location, foods); 
+    if f2: timeline.append(f"  🕒 18:00 | 🍽️ 저녁 식사: {f2['name']} ({f2.get('type', '맛집')})"); current_location = f2
+    
     timeline.append(f"  🕒 20:00 | 🏨 숙소 체크인 및 휴식: {lodging.get('name', '숙소')}")
     current_location = lodging
-    
+
     timeline.append("")
     # --- [2일차] ---
     timeline.append("🌅 [2일차]")
     timeline.append(f"  🕒 10:00 | 🏨 숙소 체크아웃")
-    
-    f3 = get_nearest(current_location, foods)
-    if f3:
-        timeline.append(f"  🕒 11:30 | 🍽️ 아점 식사: {f3['name']} ({f3.get('type', '맛집')})")
-        current_location = f3
-        
-    a2 = get_nearest(current_location, attractions)
-    if a2:
-        timeline.append(f"  🕒 14:00 | 🎡 오후 관광: {a2['name']} ({a2.get('type', '관광지')})")
-        current_location = a2
-        
-    f4 = get_nearest(current_location, foods)
-    if f4:
-        timeline.append(f"  🕒 17:00 | 🍽️ 이른 저녁 식사: {f4['name']} ({f4.get('type', '맛집')})")
-        
+    f3 = get_nearest(current_location, foods); 
+    if f3: timeline.append(f"  🕒 11:30 | 🍽️ 아점 식사: {f3['name']} ({f3.get('type', '맛집')})"); current_location = f3
+    a2 = get_nearest(current_location, attractions); 
+    if a2: timeline.append(f"  🕒 14:00 | 🎡 오후 관광: {a2['name']} ({a2.get('type', '관광지')})"); current_location = a2
+    f4 = get_nearest(current_location, foods); 
+    if f4: timeline.append(f"  🕒 17:00 | 🍽️ 이른 저녁 식사: {f4['name']} ({f4.get('type', '맛집')})")
     timeline.append(f"  🕒 19:00 | 🚄 {dest} 출발 및 여행 종료")
 
-    # 4. 최종 결과물 텍스트 생성
+    # 3. 결과 텍스트 생성
     plan_text = f"""
-    ==========================================
-    ✈️  {dest} 완벽 여행 플랜 (타임라인 기반)
-    ==========================================
-    💰 총 예상 비용: {total_cost:,}원 (예산: {budget:,}원)
-    
-    [예상 지출 내역 요약]
-    - 교통: {integrated.get('breakdown', {}).get('transport', {}).get('desc', '0원')}
-    - 숙소: {lodging.get('name', '')} ({lodging.get('estimated_cost', 0):,}원)
-    - 식비: 총 {food_total:,}원
-    - 관광: 총 {attraction_total:,}원
+==========================================
+✈️  {dest} 완벽 여행 플랜 (타임라인 기반)
+==========================================
+💰 총 예상 비용: {total_cost:,}원 (예산: {budget:,}원)
 
-    ==========================================
-    🗺️ 추천 여행 동선 (거리 기반 최적화)
-    ==========================================
+[예상 지출 내역 요약]
+- 교통: {integrated.get('breakdown', {}).get('transport', {}).get('desc', '0원')}
+- 숙소: {lodging.get('name', '')} ({lodging.get('estimated_cost', 0):,}원)
+- 식비: 총 {food_total:,}원
+- 관광: 총 {attraction_total:,}원
+
+==========================================
+🗺️ 추천 여행 동선 (거리 기반 최적화)
+==========================================
 """
     plan_text += "\n".join(timeline)
-    plan_text += "\n    =========================================="
-    
+    plan_text += "\n=========================================="
+
+    # 4. 자바 웹서버에 텍스트 출력
     print(plan_text)
 
-    return {"react_decision": "done"}
+    # 5. 🌟 [핵심] 지도용 좌표 데이터 JSON 출력
+    map_data = []
+    if lodging.get('x'): map_data.append({"name": lodging['name'], "type": "🏨 숙소", "lat": lodging['y'], "lng": lodging['x']})
+    for f in foods:
+        if f.get('x'): map_data.append({"name": f['name'], "type": "🍽️ 맛집", "lat": f['y'], "lng": f['x']})
+    for a in attractions:
+        if a.get('x'): map_data.append({"name": a['name'], "type": "🎡 관광지", "lat": a['y'], "lng": a['x']})
 
+    print("===MAP_DATA===")
+    print(json.dumps(map_data, ensure_ascii=False))
+
+    return {"react_decision": "done"}
 # ## 노드 연결 및 실행
 
 # In[141]:
