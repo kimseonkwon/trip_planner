@@ -48,38 +48,58 @@ public class TripPlannerWebServer {
                         <script>
                             let map = null;
                             let markers = [];
+
+                            // 1. 지도 초기화
                             kakao.maps.load(() => {
                                 map = new kakao.maps.Map(document.getElementById('map'), {
                                     center: new kakao.maps.LatLng(35.1795, 129.0756), level: 8
                                 });
                             });
+
                             async function generatePlan() {
                                 const p = document.getElementById('prompt').value;
                                 if(!p) return;
+                                
                                 document.getElementById('loader').style.display = 'block';
                                 document.getElementById('planOutput').style.display = 'none';
-                                markers.forEach(m => m.setMap(null)); markers = [];
+                                
+                                // 기존 마커 지우기
+                                markers.forEach(m => m.setMap(null)); 
+                                markers = [];
+                                
                                 try {
                                     const res = await fetch('/api/plan', {
                                         method: 'POST', body: 'prompt=' + encodeURIComponent(p),
                                         headers: {'Content-Type': 'application/x-www-form-urlencoded'}
                                     });
                                     const resultText = await res.text();
+                                    
                                     if(resultText.includes('===MAP_DATA===')) {
                                         const parts = resultText.split('===MAP_DATA===');
                                         document.getElementById('planOutput').innerText = parts[0].trim();
+                                        
                                         const data = JSON.parse(parts[1].trim());
-                                        const bounds = new kakao.maps.LatLngBounds();
+                                        const bounds = new kakao.maps.LatLngBounds(); 
+
                                         data.forEach(item => {
                                             const pos = new kakao.maps.LatLng(item.lat, item.lng);
-                                            const marker = new kakao.maps.Marker({position: pos, map: map});
-                                            markers.push(marker); bounds.extend(pos);
-                                            const iw = new kakao.maps.InfoWindow({content: `<div style="padding:5px;font-size:12px;"><b>${item.type}</b><br>${item.name}</div>`});
+                                            const marker = new kakao.maps.Marker({ position: pos, map: map });
+                                            markers.push(marker);
+                                            bounds.extend(pos); // 범위에 좌표 추가
+                                            
+                                            const iw = new kakao.maps.InfoWindow({
+                                                content: `<div style="padding:5px;font-size:12px;"><b>${item.type}</b><br>${item.name}</div>`
+                                            });
                                             kakao.maps.event.addListener(marker, 'mouseover', () => iw.open(map, marker));
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
-                                        map.setBounds(bounds);
-                                    } else { document.getElementById('planOutput').innerText = resultText; }
+                                        
+                                        // 모든 마커가 보이도록 지도 범위 조정
+                                        if (data.length > 0) map.setBounds(bounds);
+                                        
+                                    } else {
+                                        document.getElementById('planOutput').innerText = resultText;
+                                    }
                                     document.getElementById('planOutput').style.display = 'block';
                                 } catch(e) { alert("Error: " + e.message); }
                                 finally { document.getElementById('loader').style.display = 'none'; }
@@ -124,7 +144,7 @@ public class TripPlannerWebServer {
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
             StringBuilder output = new StringBuilder();
             String line;
-            // 🌟 [중요] \\n 대신 \n을 사용하여 줄바꿈 깨짐 방지
+            // 🌟 줄바꿈 깨짐 방지: \n으로 명확히 구분
             while ((line = reader.readLine()) != null) { output.append(line).append("\n"); }
             process.waitFor();
             String fullLog = output.toString();
