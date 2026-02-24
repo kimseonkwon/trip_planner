@@ -51,7 +51,7 @@ public class TripPlannerWebServer {
                         <div class="main-layout">
                             <div class="side-panel">
                                 <div class="section-title" style="margin-top:0;">자연어 추가 요청 (선택)</div>
-                                <input type="text" id="prompt" placeholder="예: 서울에서 출발해. 교통편은 KTX로 해줘." />
+                                <input type="text" id="prompt" placeholder="예: 울산에서 출발해. 2박 3일로 짜줘." />
                                 
                                 <div class="section-title">👨‍👩‍👧‍👦 인원수</div>
                                 <div class="radio-group">
@@ -112,14 +112,12 @@ public class TripPlannerWebServer {
                                 });
                             });
 
-                            // 직접입력 클릭 시 텍스트 박스 표시 토글
                             function toggleCustom(groupName, isShow) {
                                 document.getElementById(groupName + '_input').style.display = isShow ? 'inline-block' : 'none';
                             }
 
                             async function generatePlan() {
-                                // 1. 폼 데이터 수집
-                                let baseText = document.getElementById('prompt').value || "부산 1박2일 여행 짜줘";
+                                let baseText = document.getElementById('prompt').value || "부산 여행 짜줘";
                                 
                                 let peopleVal = document.querySelector('input[name="people"]:checked').value;
                                 if(peopleVal === 'custom') peopleVal = (document.getElementById('people_input').value || "1") + "명";
@@ -130,14 +128,12 @@ public class TripPlannerWebServer {
                                 let themeVal = document.querySelector('input[name="theme"]:checked').value;
                                 if(themeVal === 'custom') themeVal = document.getElementById('theme_input').value || "일반";
 
-                                // 2. 프롬프트 병합 (파이썬 LLM이 인식하기 쉽게 포맷팅)
                                 const combinedPrompt = `${baseText}. 조건: 인원수 ${peopleVal}, 예산 ${budgetVal}, 테마 ${themeVal}`;
                                 console.log("전달되는 프롬프트:", combinedPrompt);
 
                                 document.getElementById('loader').style.display = 'block';
                                 document.getElementById('planOutput').style.display = 'none';
                                 
-                                // 기존 요소 제거
                                 markers.forEach(m => m.setMap(null)); markers = [];
                                 polylines.forEach(p => p.setMap(null)); polylines = [];
 
@@ -158,7 +154,6 @@ public class TripPlannerWebServer {
 
                                         const bounds = new kakao.maps.LatLngBounds();
                                         
-                                        // 마커 생성
                                         markerData.forEach(item => {
                                             const pos = new kakao.maps.LatLng(item.lat, item.lng);
                                             const marker = new kakao.maps.Marker({position: pos, map: map});
@@ -168,7 +163,6 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
-                                        // 화살표 동선 그리기
                                         for (let i = 0; i < pathData.length - 1; i++) {
                                             const startPos = new kakao.maps.LatLng(pathData[i].lat, pathData[i].lng);
                                             const endPos = new kakao.maps.LatLng(pathData[i+1].lat, pathData[i+1].lng);
@@ -236,7 +230,8 @@ public class TripPlannerWebServer {
             while ((line = reader.readLine()) != null) { output.append(line).append("\n"); }
             process.waitFor();
             String fullLog = output.toString();
-            return fullLog.contains("🎉 [Planner]") ? fullLog.substring(fullLog.indexOf("🎉 [Planner]")) : fullLog;
+            return fullLog.contains("==========================================") ? 
+                   fullLog.substring(fullLog.indexOf("==========================================")) : fullLog;
         } catch (Exception e) { return "에러: " + e.getMessage(); }
     }
 }
