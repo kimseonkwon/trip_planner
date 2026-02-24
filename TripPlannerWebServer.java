@@ -48,7 +48,7 @@ public class TripPlannerWebServer {
                         <script>
                             let map = null;
                             let markers = [];
-                            let polyline = null;
+                            let polylines = []; // 🌟 화살표 선 배열로 변경
 
                             kakao.maps.load(() => {
                                 map = new kakao.maps.Map(document.getElementById('map'), {
@@ -64,7 +64,7 @@ public class TripPlannerWebServer {
                                 
                                 // 기존 요소 제거
                                 markers.forEach(m => m.setMap(null)); markers = [];
-                                if (polyline) { polyline.setMap(null); }
+                                polylines.forEach(p => p.setMap(null)); polylines = []; // 선도 모두 제거
 
                                 try {
                                     const res = await fetch('/api/plan', {
@@ -93,16 +93,22 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
-                                        // 2. 동선 선(Polyline) 그리기
-                                        const linePath = pathData.map(p => new kakao.maps.LatLng(p.lat, p.lng));
-                                        polyline = new kakao.maps.Polyline({
-                                            path: linePath,
-                                            strokeWeight: 4,
-                                            strokeColor: '#FF3366',
-                                            strokeOpacity: 0.8,
-                                            strokeStyle: 'solid'
-                                        });
-                                        polyline.setMap(map);
+                                        // 🌟 2. 화살표가 있는 동선 그리기 (구간별 쪼개기)
+                                        for (let i = 0; i < pathData.length - 1; i++) {
+                                            const startPos = new kakao.maps.LatLng(pathData[i].lat, pathData[i].lng);
+                                            const endPos = new kakao.maps.LatLng(pathData[i+1].lat, pathData[i+1].lng);
+                                            
+                                            const polyline = new kakao.maps.Polyline({
+                                                path: [startPos, endPos],
+                                                strokeWeight: 4,
+                                                strokeColor: '#FF3366',
+                                                strokeOpacity: 0.8,
+                                                strokeStyle: 'solid',
+                                                endArrow: true // 🌟 방향을 알려주는 화살표 추가!
+                                            });
+                                            polyline.setMap(map);
+                                            polylines.push(polyline);
+                                        }
 
                                         if (markerData.length > 0) map.setBounds(bounds);
                                     } else {
@@ -145,7 +151,6 @@ public class TripPlannerWebServer {
 
     private static String runPythonPlanner(String prompt) {
         try {
-            // 본인의 환경에 맞는 파이썬 경로인지 확인!
             String pyPath = "/Users/seon/anaconda3/envs/trip_planner/bin/python";
             ProcessBuilder pb = new ProcessBuilder(pyPath, "trip_planner.py", prompt);
             pb.redirectErrorStream(true);

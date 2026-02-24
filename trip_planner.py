@@ -26,30 +26,22 @@ STATION_DB = {
 }
 CITY_CODES = {"서울": "11", "용산": "11", "부산": "21", "대구": "22", "인천": "23", "광주": "24", "대전": "25", "울산": "26", "경기": "31", "강원": "32", "충북": "33", "충남": "34", "전북": "35", "전남": "36", "경북": "37", "경남": "38"}
 
-# ==========================================
-# 🌟 [수정] 카카오 장소 검색 (정렬 기준 보완)
-# ==========================================
 def fetch_kakao_places(keyword: str, category_code: str = "", size: int = 5, x: str = None, y: str = None, radius: int = None) -> List[Dict]:
     url = "https://dapi.kakao.com/v2/local/search/keyword.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
     params = {"query": keyword, "size": size}
 
-    if category_code:
-        params["category_group_code"] = category_code
-    
+    if category_code: params["category_group_code"] = category_code
     if x and y and radius:
         params["x"] = x
         params["y"] = y
         params["radius"] = radius
-        # 🌟 너무 몰리는 현상 해결: 'distance' 대신 'accuracy(정확도/인기도)' 우선
         params["sort"] = "accuracy" 
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=5)
-        if res.status_code == 200:
-            return res.json().get('documents', [])
-    except:
-        pass
+        if res.status_code == 200: return res.json().get('documents', [])
+    except: pass
     return []
 
 def fetch_price_via_tavily(query: str, min_price=3000, max_price=1000000) -> int:
@@ -127,10 +119,7 @@ def extract_json(text: str) -> Dict[str, Any]:
 # --- Nodes ---
 
 def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    print("\n🧠 [Supervisor] 사용자 자연어 요청 분석 중...")
     query = state.get("user_query", "")
-    
-    # 🌟 [수정] 프롬프트에 '역사' 등 테마 추출을 강제하도록 보강
     prompt = f"""
     당신은 여행 플래너의 Supervisor입니다.
     사용자의 자연어 요청을 분석하여 JSON으로 추출하세요.
@@ -138,7 +127,6 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     [규칙] 
     1. origin 2. destination 3. budget_total(숫자만) 4. people(숫자만) 5. duration_nights, duration_days
     6. theme: 사용자가 '역사', '자연', '맛집', '휴양' 등을 언급하면 반드시 배열로 추출하세요. 없으면 ["일반"]
-    [출력 예시] {{"origin": "서울", "destination": "부산", "duration_nights": 1, "duration_days": 2, "budget_total": 200000, "people": 2, "theme": ["역사"]}}
     """
     response = llm.invoke(prompt)
     constraints = extract_json(response.content)
@@ -150,20 +138,16 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not constraints.get("origin"): constraints["origin"] = "서울"
     if not constraints.get("people"): constraints["people"] = 1
     
-    # 테마 보정
     if not constraints.get("theme"): constraints["theme"] = ["일반"]
     elif isinstance(constraints["theme"], str): constraints["theme"] = [constraints["theme"]]
         
     constraints["duration"] = f"{constraints.get('duration_nights', 1)}박{constraints.get('duration_days', 2)}일" 
-    
-    print(f"   📋 추출된 제약조건: {json.dumps(constraints, ensure_ascii=False)}")
     return {"constraints": constraints}
 
 def transport_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "transport" and state.get("transport", {}).get("selected"):
         return {"transport": state.get("transport")}
-    print("\n🚄 [Transport] 실시간 교통편 탐색")
     c = state.get("constraints", {})
     dest, origin = c.get("destination", "부산").strip(), c.get("origin", "서울").strip() 
     mode = "고속버스" if state.get("revision_request", "") and decision == "transport" else "KTX"
@@ -193,7 +177,6 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "lodging" and state.get("lodging", {}).get("selected"):
         return {"lodging": state.get("lodging")}
-    print("\n🏨 [Lodging] 실시간 숙소 탐색")
     dest = state.get("constraints", {}).get("destination", "").strip()
     is_low = (decision == "lodging")
     kws = [f"{dest} 모텔", f"{dest} 호텔"] if is_low else [f"{dest} 호텔", f"{dest} 레지던스"]
@@ -218,61 +201,56 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
         selected = min(cands, key=lambda x: x['estimated_cost']) if is_low else random.choice(cands)
     return {"lodging": {"selected": selected}}
 
+# 🌟 [개선] 역사 관련 명소를 정확하게 찾기 위해 검색어 세분화
 def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "attraction" and state.get("attractions", {}).get("selected_list"):
         return {"attractions": state.get("attractions")}
     
-    print("\n🎡 [Attraction] 숙소 반경 10km 이내 맞춤형 테마 관광지 탐색")
     dest = state.get("constraints", {}).get("destination", "").strip()
     themes = state.get("constraints", {}).get("theme", ["일반"]) 
     lodging = state.get("lodging", {}).get("selected", {})
-    
     lx, ly = lodging.get('x'), lodging.get('y')
     radius = 10000 if lx and ly else None
 
-    # 🌟 [핵심 변경] 테마에 따른 키워드 맵핑 및 제약 완화
-    theme_kw = "가볼만한곳"
-    is_specific_theme = False
-    
     main_theme = themes[0]
+    
+    # 테마별 구체적인 키워드 리스트 (API 검색 정확도를 높임)
+    kws = []
     if "역사" in main_theme: 
-        theme_kw = "역사 유적지 문화재"
-        is_specific_theme = True
+        kws = [f"{dest} 역사", f"{dest} 유적지", f"{dest} 사적지", f"{dest} 박물관", f"{dest} 문화재"]
     elif "자연" in main_theme: 
-        theme_kw = "자연명소 공원"
-        is_specific_theme = True
+        kws = [f"{dest} 자연명소", f"{dest} 해수욕장", f"{dest} 수목원", f"{dest} 생태공원"]
     elif "문화" in main_theme: 
-        theme_kw = "박물관 미술관"
-        is_specific_theme = True
+        kws = [f"{dest} 미술관", f"{dest} 전시관", f"{dest} 문화공간"]
     elif "액티비티" in main_theme: 
-        theme_kw = "테마파크 체험"
-        is_specific_theme = True
+        kws = [f"{dest} 테마파크", f"{dest} 체험관", f"{dest} 액티비티"]
     elif main_theme != "일반":
-        theme_kw = main_theme
-        is_specific_theme = True
+        kws = [f"{dest} {main_theme}"]
+    else:
+        kws = [f"{dest} 가볼만한곳", f"{dest} 관광명소"]
 
     places, seen = [], set()
     def add_p(new_p):
         for p in new_p:
-            if p['place_name'] not in seen: seen.add(p['place_name']); places.append(p)
+            if p['place_name'] not in seen: 
+                seen.add(p['place_name']); places.append(p)
 
-    kw = f"{dest} {theme_kw}"
-    
-    # 🌟 테마가 명확하면(예: 역사) 카테고리(AT4) 제한을 풀고 키워드 위주로 넓게 검색합니다.
-    if is_specific_theme:
-        if res1 := fetch_kakao_places(kw, size=15, x=lx, y=ly, radius=radius): add_p(res1)
-    else:
-        if res1 := fetch_kakao_places(kw, category_code="AT4", size=15, x=lx, y=ly, radius=radius): add_p(res1)
-    
-    # 부족할 경우 문화시설(CT1) 및 일반 검색 추가 수행
-    if len(places) < 2 and (res2 := fetch_kakao_places(kw, category_code="CT1", size=10, x=lx, y=ly, radius=radius)): add_p(res2)
-    if len(places) < 2 and (res3 := fetch_kakao_places(f"{dest} 가볼만한곳", category_code="AT4", size=10, x=lx, y=ly, radius=radius)): add_p(res3)
+    # 1. 키워드 리스트를 순회하며 테마에 맞는 곳을 1순위로 채움
+    for kw in kws:
+        if res := fetch_kakao_places(kw, size=15, x=lx, y=ly, radius=radius):
+            add_p(res)
+        if len(places) >= 10: break # 충분히 모이면 중단
+
+    # 2. 그래도 부족하면 일반 관광지(AT4)로 보충
+    if len(places) < 2:
+        if res_fallback := fetch_kakao_places(f"{dest} 가볼만한곳", category_code="AT4", size=10, x=lx, y=ly, radius=radius):
+            add_p(res_fallback)
 
     selected_list = []
     if places:
-        # 상위 10개 풀에서 랜덤하게 2개를 뽑아 지나친 밀집을 방지
-        candidates_pool = places[:10]
+        # 풀에서 섞어서 너무 한 동네만 나오지 않게 함
+        candidates_pool = places[:15]
         random.shuffle(candidates_pool)
         candidates = candidates_pool[:2]
         
@@ -298,10 +276,8 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if state.get("retry_count", 0) > 0 and decision != "food" and state.get("food", {}).get("selected_list"):
         return {"food": state.get("food")}
     
-    print("\n🍽️ [Food] 숙소 반경 10km 이내 맛집 탐색")
     dest = state.get("constraints", {}).get("destination", "").strip()
     lodging = state.get("lodging", {}).get("selected", {})
-    
     lx, ly = lodging.get('x'), lodging.get('y')
     radius = 10000 if lx and ly else None
 
@@ -318,8 +294,6 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
     selected_list = []
     if places:
         processed = []
-        
-        # 맛집도 약간 섞어서 지나치게 한 동네에 뭉치는 것을 방지
         candidates_pool = places[:12]
         if decision != "food": random.shuffle(candidates_pool)
         
