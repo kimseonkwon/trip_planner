@@ -122,15 +122,15 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     query = state.get("user_query", "")
     prompt = f"""
     당신은 여행 플래너의 Supervisor입니다.
-    사용자의 자연어 요청을 분석하여 JSON으로 추출하세요.
+    사용자의 요청(자연어 및 추가 조건 포함)을 분석하여 JSON으로 추출하세요.
     [사용자 요청] "{query}"
     [규칙] 
     1. origin 2. destination 3. budget_total(숫자만) 4. people(숫자만) 5. duration_nights, duration_days
-    6. theme: 사용자가 '역사', '자연', '맛집', '휴양' 등을 언급하면 반드시 배열로 추출하세요. 없으면 ["일반"]
+    6. theme: 사용자가 언급한 테마(역사, 자연, 스포츠 등)를 배열로 추출. 없으면 ["일반"]
     """
     response = llm.invoke(prompt)
     constraints = extract_json(response.content)
-    if not constraints: constraints = {"destination": "서울", "people": 1, "theme": ["일반"]}
+    if not constraints: constraints = {"destination": "부산", "people": 1, "theme": ["일반"]}
     
     man_match = re.search(r'(\d+)\s*만', query)
     if man_match: constraints["budget_total"] = int(man_match.group(1)) * 10000
@@ -177,7 +177,7 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "lodging" and state.get("lodging", {}).get("selected"):
         return {"lodging": state.get("lodging")}
-    dest = state.get("constraints", {}).get("destination", "").strip()
+    dest = state.get("constraints", {}).get("destination", "부산").strip()
     is_low = (decision == "lodging")
     kws = [f"{dest} 모텔", f"{dest} 호텔"] if is_low else [f"{dest} 호텔", f"{dest} 레지던스"]
     
@@ -201,13 +201,12 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
         selected = min(cands, key=lambda x: x['estimated_cost']) if is_low else random.choice(cands)
     return {"lodging": {"selected": selected}}
 
-# 🌟 [개선] 역사 관련 명소를 정확하게 찾기 위해 검색어 세분화
 def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "attraction" and state.get("attractions", {}).get("selected_list"):
         return {"attractions": state.get("attractions")}
     
-    dest = state.get("constraints", {}).get("destination", "").strip()
+    dest = state.get("constraints", {}).get("destination", "부산").strip()
     themes = state.get("constraints", {}).get("theme", ["일반"]) 
     lodging = state.get("lodging", {}).get("selected", {})
     lx, ly = lodging.get('x'), lodging.get('y')
@@ -215,7 +214,7 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     main_theme = themes[0]
     
-    # 테마별 구체적인 키워드 리스트 (API 검색 정확도를 높임)
+    # 🌟 [추가] 스포츠/기타 테마 키워드 맵핑
     kws = []
     if "역사" in main_theme: 
         kws = [f"{dest} 역사", f"{dest} 유적지", f"{dest} 사적지", f"{dest} 박물관", f"{dest} 문화재"]
@@ -223,8 +222,8 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
         kws = [f"{dest} 자연명소", f"{dest} 해수욕장", f"{dest} 수목원", f"{dest} 생태공원"]
     elif "문화" in main_theme: 
         kws = [f"{dest} 미술관", f"{dest} 전시관", f"{dest} 문화공간"]
-    elif "액티비티" in main_theme: 
-        kws = [f"{dest} 테마파크", f"{dest} 체험관", f"{dest} 액티비티"]
+    elif "액티비티" in main_theme or "스포츠" in main_theme: 
+        kws = [f"{dest} 스포츠", f"{dest} 레저", f"{dest} 경기장", f"{dest} 액티비티", f"{dest} 체험"]
     elif main_theme != "일반":
         kws = [f"{dest} {main_theme}"]
     else:
@@ -236,20 +235,17 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if p['place_name'] not in seen: 
                 seen.add(p['place_name']); places.append(p)
 
-    # 1. 키워드 리스트를 순회하며 테마에 맞는 곳을 1순위로 채움
     for kw in kws:
         if res := fetch_kakao_places(kw, size=15, x=lx, y=ly, radius=radius):
             add_p(res)
-        if len(places) >= 10: break # 충분히 모이면 중단
+        if len(places) >= 10: break
 
-    # 2. 그래도 부족하면 일반 관광지(AT4)로 보충
     if len(places) < 2:
         if res_fallback := fetch_kakao_places(f"{dest} 가볼만한곳", category_code="AT4", size=10, x=lx, y=ly, radius=radius):
             add_p(res_fallback)
 
     selected_list = []
     if places:
-        # 풀에서 섞어서 너무 한 동네만 나오지 않게 함
         candidates_pool = places[:15]
         random.shuffle(candidates_pool)
         candidates = candidates_pool[:2]
@@ -276,7 +272,7 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if state.get("retry_count", 0) > 0 and decision != "food" and state.get("food", {}).get("selected_list"):
         return {"food": state.get("food")}
     
-    dest = state.get("constraints", {}).get("destination", "").strip()
+    dest = state.get("constraints", {}).get("destination", "부산").strip()
     lodging = state.get("lodging", {}).get("selected", {})
     lx, ly = lodging.get('x'), lodging.get('y')
     radius = 10000 if lx and ly else None
@@ -428,5 +424,5 @@ workflow.add_conditional_edges("react", lambda x: x.get("react_decision", "plann
 app = workflow.compile()
 
 if __name__ == "__main__":
-    my_request = sys.argv[1] if len(sys.argv) > 1 else "부산 1박2일 70만원 역사명소 위주"
+    my_request = sys.argv[1] if len(sys.argv) > 1 else "부산 1박2일 30만원"
     app.invoke({"user_query": my_request, "retry_count": 0})
