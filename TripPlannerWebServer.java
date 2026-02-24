@@ -93,12 +93,12 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
-                                        // 2. 동선 선(Polyline) 그리기
+                                        // 2. 동선 선(Polyline) 그리기 (경로 데이터 연결)
                                         const linePath = pathData.map(p => new kakao.maps.LatLng(p.lat, p.lng));
                                         polyline = new kakao.maps.Polyline({
                                             path: linePath,
-                                            strokeWeight: 5,
-                                            strokeColor: '#FF3366',
+                                            strokeWeight: 4,
+                                            strokeColor: '#FF3366', // 예쁜 핑크/레드 계열
                                             strokeOpacity: 0.8,
                                             strokeStyle: 'solid'
                                         });
@@ -145,6 +145,7 @@ public class TripPlannerWebServer {
 
     private static String runPythonPlanner(String prompt) {
         try {
+            // 본인의 환경에 맞는 파이썬 경로인지 꼭 확인해 주세요
             String pyPath = "/Users/seon/anaconda3/envs/trip_planner/bin/python";
             ProcessBuilder pb = new ProcessBuilder(pyPath, "trip_planner.py", prompt);
             pb.redirectErrorStream(true);
