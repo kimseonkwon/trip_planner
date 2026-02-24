@@ -51,8 +51,19 @@ public class TripPlannerWebServer {
                         <div class="main-layout">
                             <div class="side-panel">
                                 <div class="section-title" style="margin-top:0;">자연어 추가 요청 (선택)</div>
-                                <input type="text" id="prompt" placeholder="예: 울산에서 출발해. 2박 3일로 짜줘." />
+                                <input type="text" id="prompt" placeholder="예: 울산에서 출발해. 바다가 보고싶어." />
                                 
+                                <div class="section-title">🗓️ 일정</div>
+                                <div class="radio-group">
+                                    <input type="radio" name="duration" id="d1" value="1박 2일" checked onclick="toggleCustom('duration', false)">
+                                    <label for="d1">1박 2일</label>
+                                    <input type="radio" name="duration" id="d2" value="2박 3일" onclick="toggleCustom('duration', false)">
+                                    <label for="d2">2박 3일</label>
+                                    <input type="radio" name="duration" id="d_custom" value="custom" onclick="toggleCustom('duration', true)">
+                                    <label for="d_custom">직접입력</label>
+                                    <input type="text" id="duration_input" class="custom-input" placeholder="예: 3박 4일">
+                                </div>
+
                                 <div class="section-title">👨‍👩‍👧‍👦 인원수</div>
                                 <div class="radio-group">
                                     <input type="radio" name="people" id="p1" value="1명" checked onclick="toggleCustom('people', false)">
@@ -119,6 +130,10 @@ public class TripPlannerWebServer {
                             async function generatePlan() {
                                 let baseText = document.getElementById('prompt').value || "부산 여행 짜줘";
                                 
+                                // 🌟 폼 데이터 수집
+                                let durVal = document.querySelector('input[name="duration"]:checked').value;
+                                if(durVal === 'custom') durVal = (document.getElementById('duration_input').value || "1박 2일");
+
                                 let peopleVal = document.querySelector('input[name="people"]:checked').value;
                                 if(peopleVal === 'custom') peopleVal = (document.getElementById('people_input').value || "1") + "명";
                                 
@@ -128,7 +143,7 @@ public class TripPlannerWebServer {
                                 let themeVal = document.querySelector('input[name="theme"]:checked').value;
                                 if(themeVal === 'custom') themeVal = document.getElementById('theme_input').value || "일반";
 
-                                const combinedPrompt = `${baseText}. 조건: 인원수 ${peopleVal}, 예산 ${budgetVal}, 테마 ${themeVal}`;
+                                const combinedPrompt = `${baseText}. 조건: 일정 ${durVal}, 인원수 ${peopleVal}, 예산 ${budgetVal}, 테마 ${themeVal}`;
                                 console.log("전달되는 프롬프트:", combinedPrompt);
 
                                 document.getElementById('loader').style.display = 'block';
@@ -163,14 +178,21 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
+                                        // 🌟 날짜별 색상 지정 (1일차:빨강/핑크, 2일차:파랑, 3일차:초록, 4일차:주황)
+                                        const dayColors = ['#FF3366', '#3366FF', '#33CC66', '#FF9933', '#9933FF', '#00BCD4'];
+
                                         for (let i = 0; i < pathData.length - 1; i++) {
                                             const startPos = new kakao.maps.LatLng(pathData[i].lat, pathData[i].lng);
                                             const endPos = new kakao.maps.LatLng(pathData[i+1].lat, pathData[i+1].lng);
                                             
+                                            // 선의 색상은 '출발지'의 날짜(day)를 기준으로 부여
+                                            const currentDay = pathData[i].day || 1;
+                                            const lineColor = dayColors[(currentDay - 1) % dayColors.length];
+
                                             const polyline = new kakao.maps.Polyline({
                                                 path: [startPos, endPos],
                                                 strokeWeight: 4,
-                                                strokeColor: '#FF3366',
+                                                strokeColor: lineColor, 
                                                 strokeOpacity: 0.8,
                                                 strokeStyle: 'solid',
                                                 endArrow: true
