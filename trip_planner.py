@@ -21,20 +21,18 @@ TAVILY_API_KEY = "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"
 SERP_API_KEY = "fbb08fded2aca6608570b8ffc92ace4abf6a108ffa9f1f36db9009f5519af50a"
 
 STATION_DB = {
-    "기차": {"서울": "NAT010000", "용산": "NAT010032", "부산": "NAT011573", "울산": "NAT014445", "태화강": "NAT011599", "동대구": "NAT011668", "대전": "NAT010032", "광주": "NAT010522", "강릉": "NAT010065", "목포": "NAT010486"},
-    "버스": {"서울": "NAEK010", "부산": "NAEK700", "울산": "NAEK715", "대구": "NAEK801", "대전": "NAEK300", "광주": "NAEK500"}
+    "기차": {"서울": "NAT010000", "용산": "NAT010032", "부산": "NAT011573", "울산": "NAT014445", "태화강": "NAT011599", "동대구": "NAT011668", "대전": "NAT010032", "광주": "NAT010522", "경주": "NAT011649", "강릉": "NAT010065"},
+    "버스": {"서울": "NAEK010", "부산": "NAEK700", "울산": "NAEK715", "대구": "NAEK801", "대전": "NAEK300", "경주": "NAEK713"}
 }
-CITY_CODES = {"서울": "11", "용산": "11", "부산": "21", "대구": "22", "인천": "23", "광주": "24", "대전": "25", "울산": "26", "경기": "31", "강원": "32", "충북": "33", "충남": "34", "전북": "35", "전남": "36", "경북": "37", "경남": "38"}
+CITY_CODES = {"서울": "11", "용산": "11", "부산": "21", "대구": "22", "인천": "23", "광주": "24", "대전": "25", "울산": "26", "경주": "37"}
 
 def fetch_kakao_places(keyword: str, category_code: str = "", size: int = 5, x: str = None, y: str = None, radius: int = None) -> List[Dict]:
     url = "https://dapi.kakao.com/v2/local/search/keyword.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
     params = {"query": keyword, "size": size}
-
     if category_code: params["category_group_code"] = category_code
     if x and y and radius:
         params["x"] = x; params["y"] = y; params["radius"] = radius; params["sort"] = "accuracy"
-
     try:
         res = requests.get(url, headers=headers, params=params, timeout=5)
         if res.status_code == 200: return res.json().get('documents', [])
@@ -97,7 +95,6 @@ class TravelState(TypedDict):
     revision_request: str
     retry_count: int
     tried_steps: list
-    final_plan: str
 
 def extract_json(text: str) -> Dict[str, Any]:
     try:
@@ -121,7 +118,7 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     당신은 여행 플래너의 Supervisor입니다.
     사용자의 요청을 분석하여 JSON으로 추출하세요.
     [사용자 요청] "{query}"
-    [규칙] 1. origin 2. destination 3. budget_total(숫자만) 4. people(숫자만) 5. duration_nights, duration_days 6. theme(배열)
+    [규칙] 1. origin 2. destination 3. budget_total(숫자) 4. people(숫자) 5. duration_nights 6. duration_days 7. theme(배열)
     """
     response = llm.invoke(prompt)
     constraints = extract_json(response.content)
@@ -130,7 +127,6 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     man_match = re.search(r'(\d+)\s*만', query)
     if man_match: constraints["budget_total"] = int(man_match.group(1)) * 10000
     elif not constraints.get("budget_total"): constraints["budget_total"] = 300000
-    
     if not constraints.get("origin"): constraints["origin"] = "서울"
     if not constraints.get("people"): constraints["people"] = 1
     if not constraints.get("theme"): constraints["theme"] = ["일반"]
@@ -143,8 +139,6 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         if not constraints.get("duration_nights"): constraints["duration_nights"] = 1
         if not constraints.get("duration_days"): constraints["duration_days"] = 2
-        
-    constraints["duration"] = f"{constraints.get('duration_nights')}박{constraints.get('duration_days')}일" 
     return {"constraints": constraints}
 
 def transport_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -173,7 +167,6 @@ def transport_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not selected:
         price = fetch_price_via_tavily(f"{origin} {dest} {mode} 요금", 5000, 100000) or (15000 if mode == "고속버스" else 30000)
         selected = {"type": mode, "name": f"{origin} ↔ {dest} {mode}", "cost": price}
-
     return {"transport": {"selected": selected}}
 
 def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -200,7 +193,6 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 valid_prices += [int(mp) * 10000 for mp in re.findall(r'([1-9][0-9]*)\s*만\s*원?', context)]
                 fp = min([v for v in valid_prices if v >= (30000 if is_low else 50000)]) if valid_prices else (45000 if is_low else 180000)
             except: fp = 45000 if is_low else 150000
-            # 🌟 URL 추가
             cands.append({"name": p['place_name'], "estimated_cost": fp, "type": p.get('category_name', '숙소').split(' > ')[-1], "x": p.get('x'), "y": p.get('y'), "url": p.get('place_url', '')})
         selected = min(cands, key=lambda x: x['estimated_cost']) if is_low else random.choice(cands)
     return {"lodging": {"selected": selected}}
@@ -221,9 +213,9 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     main_theme = themes[0]
     kws = []
-    if "역사" in main_theme: kws = [f"{dest} 역사", f"{dest} 유적지", f"{dest} 사적지", f"{dest} 문화재"]
-    elif "자연" in main_theme: kws = [f"{dest} 자연명소", f"{dest} 해수욕장", f"{dest} 수목원", f"{dest} 생태공원"]
-    elif "문화" in main_theme: kws = [f"{dest} 미술관", f"{dest} 전시관", f"{dest} 복합문화공간"]
+    if "역사" in main_theme: kws = [f"{dest} 역사", f"{dest} 유적지", f"{dest} 문화재"]
+    elif "자연" in main_theme: kws = [f"{dest} 자연명소", f"{dest} 해수욕장", f"{dest} 생태공원"]
+    elif "문화" in main_theme: kws = [f"{dest} 미술관", f"{dest} 전시관"]
     elif "액티비티" in main_theme or "스포츠" in main_theme: kws = [f"{dest} 스포츠", f"{dest} 레저", f"{dest} 경기장", f"{dest} 체험"]
     elif main_theme != "일반": kws = [f"{dest} {main_theme}"]
     else: kws = [f"{dest} 가볼만한곳", f"{dest} 핫플"]
@@ -245,23 +237,18 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
         candidates_pool = places[:15]
         random.shuffle(candidates_pool)
         candidates = candidates_pool[:target] 
-        
         for p in candidates:
             try:
                 res = requests.get("https://serpapi.com/search", params={"engine": "google", "q": f"{dest} {p['place_name']} 성인 입장료", "api_key": SERP_API_KEY, "hl": "ko", "gl": "kr"}, timeout=10).json()
                 context = " ".join([str(res.get("answer_box", "")), str(res.get("knowledge_graph", ""))] + [o.get("snippet", "") for o in res.get("organic_results", [])[:2]])
-                if any(k in context.replace(" ", "") for k in ["입장료무료", "무료입장", "무료개방", "입장료:0원", "무료이용"]): fp = 0
+                if any(k in context.replace(" ", "") for k in ["입장료무료", "무료입장", "무료개방", "입장료:0원"]): fp = 0
                 else:
                     vps = [int(cp.replace(',', '')) for cp in re.findall(r'(?:₩|입장료\s*:?\s*)?([1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\s*원)?', context)]
-                    vps += [int(mp) * 10000 for mp in re.findall(r'([1-9][0-9]*)\s*만\s*원?', context)]
-                    vps += [int(rp) for rp in re.findall(r'([1-9][0-9]{2,4})\s*원', context)]
                     reals = [v for v in vps if 500 <= v <= 200000]
                     fp = min(reals) if reals else 0
                 if any(k in p.get('category_name', '') for k in ["공원", "산", "휴양림", "계곡", "해수욕장", "정원", "해변"]) and fp > 15000: fp = 0
             except: fp = 0
-            # 🌟 URL 추가
             selected_list.append({"name": p['place_name'], "type": p.get('category_name', '관광지').split(' > ')[-1], "estimated_cost": fp, "x": p.get('x'), "y": p.get('y'), "url": p.get('place_url', '')})
-
     return {"attractions": {"selected_list": selected_list}}
 
 def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -300,19 +287,16 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 reals = [v for v in vps if (5000 if decision=="food" else 8000) <= v <= (20000 if decision=="food" else 80000)]
                 fp = min(reals) if reals else (8000 if decision=="food" else 15000)
             except: fp = 8000 if decision=="food" else 15000
-            # 🌟 URL 추가
             processed.append({"name": p['place_name'], "type": p.get('category_name', '').split(' > ')[-1], "estimated_cost": fp, "x": p.get('x'), "y": p.get('y'), "url": p.get('place_url', '')})
         
         if decision == "food": processed.sort(key=lambda x: x['estimated_cost'])
         selected_list = processed[:target]
-        
     return {"food": {"selected_list": selected_list}}
 
 def integrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     c = state.get("constraints", {})
     people = c.get("people", 1)
     nights = c.get("duration_nights", 1)
-    
     trans, lodg = state.get("transport", {}).get("selected", {}), state.get("lodging", {}).get("selected", {})
     foods, attrs = state.get("food", {}).get("selected_list", []), state.get("attractions", {}).get("selected_list", [])
 
@@ -322,10 +306,7 @@ def integrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ac = sum(a.get('estimated_cost', 0) for a in attrs) * people
     
     total = tc + lc + fc + ac
-    state["integrated"] = {
-        "total_cost": total,
-        "breakdown": {"transport": {"desc": f"{tc:,}원"}, "lodging": {"desc": f"{lc:,}원"}, "food": {"desc": f"{fc:,}원"}, "attraction": {"desc": f"{ac:,}원"}}
-    }
+    state["integrated"] = {"total_cost": total, "breakdown": {"transport": tc, "lodging": lc, "food": fc, "attraction": ac}}
     return state
 
 def validation_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -337,8 +318,9 @@ def validation_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def react_decision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     tried = state.get("tried_steps", [])
     if state.get("retry_count", 0) >= 4: return {"react_decision": "planner"}
-    costs = {k: int(re.findall(r'[0-9,]+', str(v.get("desc","0")))[0].replace(',','')) for k, v in state.get("integrated", {}).get("breakdown", {}).items() if k not in tried}
-    target = max(costs, key=costs.get) if costs else "planner"
+    costs = state.get("integrated", {}).get("breakdown", {})
+    available = {k: v for k, v in costs.items() if k not in tried}
+    target = max(available, key=available.get) if available else "planner"
     return {"react_decision": target, "retry_count": state.get("retry_count", 0) + 1, "tried_steps": tried + [target]}
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -350,6 +332,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
         return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
     except: return 0
 
+# 🌟 [완전 개편] UI 생성을 위한 구조화된 JSON 데이터 출력
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     c = state.get("constraints", {})
     dest = c.get("destination", "부산")
@@ -370,7 +353,6 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     breakdown = state.get("integrated", {}).get("breakdown", {})
 
     ordered_path = []
-    # 🌟 날짜(day) 데이터 포함하여 저장
     def add_to_path(item, day):
         if item and item.get('x') and item.get('y'):
             ordered_path.append({"lat": float(item['y']), "lng": float(item['x']), "day": day})
@@ -381,72 +363,59 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             cands.sort(key=lambda i: calculate_distance(cur['y'], cur['x'], i['y'], i['x']))
         return cands.pop(0)
 
+    # 1. PLAN JSON 조립
+    plan_data = {
+        "meta": {
+            "dest": dest, "origin": origin, "nights": nights, "days": days,
+            "people": people, "budget": budget, "total_cost": total_cost,
+            "themes": ", ".join(themes),
+            "breakdown": breakdown,
+            "lodging_name": lodging.get('name', '숙소 미정'),
+            "warning": "⚠️ [예산 초과 알림] 설정하신 예산보다 예상 비용이 높습니다. 예산을 상향 조정해 보는 것은 어떨까요?" if total_cost > budget else ""
+        },
+        "timeline": [],
+        "details": []
+    }
+
     cur = {} 
-    timeline = []
-    
+    # 2. 타임라인 생성
     for d in range(1, days + 1):
-        timeline.append(f"\n🌴 [{d}일차]")
+        day_schedule = []
         if d == 1:
-            timeline.append(f"  🕒 10:00 | 🚄 {dest} 도착 및 일정 시작 ({origin} ↔ {dest} {transport.get('name', '')})")
+            day_schedule.append({"time": "10:00", "icon": "🚄", "title": f"{dest} 도착 및 일정 시작", "desc": f"{origin} ↔ {dest} {transport.get('name', '')}"})
         elif d == days:
-            timeline.append(f"  🕒 10:00 | 🏨 숙소 체크아웃 ({lodging.get('name', '숙소')})")
+            day_schedule.append({"time": "10:00", "icon": "🏨", "title": "숙소 체크아웃", "desc": lodging.get('name', '숙소')})
         else:
-            timeline.append(f"  🕒 10:00 | 🏨 일정 시작 (숙소 출발)")
+            day_schedule.append({"time": "10:00", "icon": "🏨", "title": "일정 시작", "desc": "숙소 출발"})
             
         if f := get_nearest(cur, foods_temp):
-            timeline.append(f"  🕒 11:30 | 🍽️ 점심 식사: {f['name']}"); cur = f; add_to_path(f, d)
+            day_schedule.append({"time": "11:30", "icon": "🍽️", "title": "점심 식사", "desc": f['name']}); cur = f; add_to_path(f, d)
             
         if a := get_nearest(cur, attrs_temp):
-            timeline.append(f"  🕒 14:00 | 🎡 오후 관광: {a['name']}"); cur = a; add_to_path(a, d)
+            day_schedule.append({"time": "14:00", "icon": "🎡", "title": "오후 관광", "desc": a['name']}); cur = a; add_to_path(a, d)
             
         if f := get_nearest(cur, foods_temp):
-            if d == days:
-                timeline.append(f"  🕒 17:00 | 🍽️ 이른 저녁: {f['name']}"); cur = f; add_to_path(f, d)
-            else:
-                timeline.append(f"  🕒 18:00 | 🍽️ 저녁 식사: {f['name']}"); cur = f; add_to_path(f, d)
+            t_title = "이른 저녁" if d == days else "저녁 식사"
+            t_time = "17:00" if d == days else "18:00"
+            day_schedule.append({"time": t_time, "icon": "🍽️", "title": t_title, "desc": f['name']}); cur = f; add_to_path(f, d)
                 
         if d == 1:
-            timeline.append(f"  🕒 20:00 | 🏨 숙소 체크인: {lodging.get('name')}"); cur = lodging; add_to_path(lodging, d)
+            day_schedule.append({"time": "20:00", "icon": "🏨", "title": "숙소 체크인", "desc": lodging.get('name')}); cur = lodging; add_to_path(lodging, d)
         elif d < days:
-            timeline.append(f"  🕒 20:00 | 🏨 숙소 복귀 및 휴식"); cur = lodging; add_to_path(lodging, d)
+            day_schedule.append({"time": "20:00", "icon": "🏨", "title": "숙소 복귀 및 휴식", "desc": ""}); cur = lodging; add_to_path(lodging, d)
         elif d == days:
-            timeline.append(f"  🕒 19:00 | 🚄 {dest} 출발 및 여행 종료")
+            day_schedule.append({"time": "19:00", "icon": "🚄", "title": f"{dest} 출발 및 여행 종료", "desc": ""})
 
-    theme_str = ", ".join(themes)
-    plan_text = f"""==========================================
-✈️  {dest} 맞춤형 여행 플랜 ({nights}박 {days}일)
-==========================================
-📌 [사용자 제약 조건 및 기본 정보]
-- 🗓️ 일정: {nights}박 {days}일
-- 👥 인원: {people}명
-- 💰 예산: {budget:,}원 (총 예상 비용: {total_cost:,}원)
-- 🎯 테마: {theme_str}
-- 📍 경로: {origin} ↔ {dest}
+        plan_data["timeline"].append({"day": d, "schedule": day_schedule})
 
-[예상 지출 내역 요약]
-- 교통: {breakdown.get('transport', {}).get('desc', '0원')}
-- 숙소: {lodging.get('name', '')} ({breakdown.get('lodging', {}).get('desc', '0원')})
-- 식비: 총 {breakdown.get('food', {}).get('desc', '0원')}
-- 관광: 총 {breakdown.get('attraction', {}).get('desc', '0원')}
-=========================================="""
-
-    # 🌟 예산 초과 경고 문구 추가
-    if total_cost > budget:
-        plan_text += "\n\n⚠️ [안내] 예산 초과 등의 사유로 일부 일정이 제한적일 수 있습니다. 예산을 조금 더 늘려보는 건 어떨까요?\n"
-
-    plan_text += "\n" + "\n".join(timeline) + "\n=========================================="
-    
-    # 🌟 세부 정보(주소/링크 및 가격) 추가
-    plan_text += "\n🔍 [세부 정보 (카카오맵 링크)]\n"
-    plan_text += f" - 🏨 숙소: {lodging.get('name')} | 예상비용: {lodging.get('estimated_cost',0):,}원 | 링크: {lodging.get('url', '없음')}\n"
+    # 3. 상세 정보 생성 (가격 및 URL)
+    plan_data["details"].append({"icon": "🏨", "category": lodging.get('type','숙소'), "name": lodging.get('name'), "cost": lodging.get('estimated_cost',0), "url": lodging.get('url', '')})
     for a in all_attrs:
-        plan_text += f" - 🎡 관광: {a['name']} | 예상비용: {a.get('estimated_cost',0):,}원 | 링크: {a.get('url', '없음')}\n"
+        plan_data["details"].append({"icon": "🎡", "category": a.get('type','관광지'), "name": a['name'], "cost": a.get('estimated_cost',0), "url": a.get('url', '')})
     for f in all_foods:
-        plan_text += f" - 🍽️ 식당: {f['name']} | 예상비용: {f.get('estimated_cost',0):,}원 | 링크: {f.get('url', '없음')}\n"
-    plan_text += "==========================================\n"
-    
-    print(plan_text)
+        plan_data["details"].append({"icon": "🍽️", "category": f.get('type','식당'), "name": f['name'], "cost": f.get('estimated_cost',0), "url": f.get('url', '')})
 
+    # 지도 핀용 데이터
     map_data = []
     if lodging.get('x'): map_data.append({"name": lodging['name'], "type": "🏨 숙소", "lat": float(lodging['y']), "lng": float(lodging['x'])})
     for f in all_foods:
@@ -454,8 +423,14 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     for a in all_attrs:
         if a.get('x'): map_data.append({"name": a['name'], "type": "🎡 관광지", "lat": float(a['y']), "lng": float(a['x'])})
 
-    print("===MAP_DATA===\n" + json.dumps(map_data, ensure_ascii=False))
-    print("===PATH_DATA===\n" + json.dumps(ordered_path, ensure_ascii=False))
+    # 🌟 자바스크립트로 출력
+    print("===PLAN_DATA===")
+    print(json.dumps(plan_data, ensure_ascii=False))
+    print("===MAP_DATA===")
+    print(json.dumps(map_data, ensure_ascii=False))
+    print("===PATH_DATA===")
+    print(json.dumps(ordered_path, ensure_ascii=False))
+    
     return {"react_decision": "done"}
 
 workflow = StateGraph(TravelState)
@@ -481,5 +456,5 @@ workflow.add_conditional_edges("react", lambda x: x.get("react_decision", "plann
 app = workflow.compile()
 
 if __name__ == "__main__":
-    my_request = sys.argv[1] if len(sys.argv) > 1 else "부산 2박3일 100만원"
+    my_request = sys.argv[1] if len(sys.argv) > 1 else "경주 2박3일 100만원"
     app.invoke({"user_query": my_request, "retry_count": 0})
