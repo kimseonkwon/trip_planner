@@ -38,7 +38,7 @@ public class TripPlannerWebServer {
                         <header><h2 style="margin:0;">✈️ AI 여행 동선 플래너</h2></header>
                         <div class="main-layout">
                             <div class="side-panel">
-                                <input type="text" id="prompt" placeholder="부산 1박 2일 예산 70만원" />
+                                <input type="text" id="prompt" placeholder="부산 1박 2일 예산 70만원 역사 위주로" />
                                 <button onclick="generatePlan()">계획 생성하기</button>
                                 <div class="loader" id="loader">⏳ AI가 동선을 계산 중입니다...</div>
                                 <div id="planOutput"></div>
@@ -93,12 +93,12 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
-                                        // 2. 동선 선(Polyline) 그리기 (경로 데이터 연결)
+                                        // 2. 동선 선(Polyline) 그리기
                                         const linePath = pathData.map(p => new kakao.maps.LatLng(p.lat, p.lng));
                                         polyline = new kakao.maps.Polyline({
                                             path: linePath,
                                             strokeWeight: 4,
-                                            strokeColor: '#FF3366', // 예쁜 핑크/레드 계열
+                                            strokeColor: '#FF3366',
                                             strokeOpacity: 0.8,
                                             strokeStyle: 'solid'
                                         });
@@ -145,7 +145,7 @@ public class TripPlannerWebServer {
 
     private static String runPythonPlanner(String prompt) {
         try {
-            // 본인의 환경에 맞는 파이썬 경로인지 꼭 확인해 주세요
+            // 본인의 환경에 맞는 파이썬 경로인지 확인!
             String pyPath = "/Users/seon/anaconda3/envs/trip_planner/bin/python";
             ProcessBuilder pb = new ProcessBuilder(pyPath, "trip_planner.py", prompt);
             pb.redirectErrorStream(true);

@@ -27,7 +27,7 @@ STATION_DB = {
 CITY_CODES = {"서울": "11", "용산": "11", "부산": "21", "대구": "22", "인천": "23", "광주": "24", "대전": "25", "울산": "26", "경기": "31", "강원": "32", "충북": "33", "충남": "34", "전북": "35", "전남": "36", "경북": "37", "경남": "38"}
 
 # ==========================================
-# 🌟 [수정] 카카오 장소 검색 (반경 & 거리순 정렬 기능 추가)
+# 🌟 [수정] 카카오 장소 검색 (정렬 기준 보완)
 # ==========================================
 def fetch_kakao_places(keyword: str, category_code: str = "", size: int = 5, x: str = None, y: str = None, radius: int = None) -> List[Dict]:
     url = "https://dapi.kakao.com/v2/local/search/keyword.json"
@@ -37,12 +37,12 @@ def fetch_kakao_places(keyword: str, category_code: str = "", size: int = 5, x: 
     if category_code:
         params["category_group_code"] = category_code
     
-    # 숙소 좌표가 넘어왔다면 반경 검색 및 거리순 정렬 적용!
     if x and y and radius:
         params["x"] = x
         params["y"] = y
         params["radius"] = radius
-        params["sort"] = "distance" 
+        # 🌟 너무 몰리는 현상 해결: 'distance' 대신 'accuracy(정확도/인기도)' 우선
+        params["sort"] = "accuracy" 
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=5)
@@ -129,22 +129,34 @@ def extract_json(text: str) -> Dict[str, Any]:
 def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     print("\n🧠 [Supervisor] 사용자 자연어 요청 분석 중...")
     query = state.get("user_query", "")
+    
+    # 🌟 [수정] 프롬프트에 '역사' 등 테마 추출을 강제하도록 보강
     prompt = f"""
     당신은 여행 플래너의 Supervisor입니다.
     사용자의 자연어 요청을 분석하여 JSON으로 추출하세요.
     [사용자 요청] "{query}"
-    [규칙] 1. origin 2. destination 3. budget_total(숫자만) 4. people(숫자만) 5. duration_nights, duration_days
-    [출력 예시] {{"origin": "서울", "destination": "부산", "duration_nights": 1, "duration_days": 2, "budget_total": 200000, "people": 2, "theme": ["맛집"]}}
+    [규칙] 
+    1. origin 2. destination 3. budget_total(숫자만) 4. people(숫자만) 5. duration_nights, duration_days
+    6. theme: 사용자가 '역사', '자연', '맛집', '휴양' 등을 언급하면 반드시 배열로 추출하세요. 없으면 ["일반"]
+    [출력 예시] {{"origin": "서울", "destination": "부산", "duration_nights": 1, "duration_days": 2, "budget_total": 200000, "people": 2, "theme": ["역사"]}}
     """
     response = llm.invoke(prompt)
     constraints = extract_json(response.content)
-    if not constraints: constraints = {"destination": "서울", "people": 1}
+    if not constraints: constraints = {"destination": "서울", "people": 1, "theme": ["일반"]}
+    
     man_match = re.search(r'(\d+)\s*만', query)
     if man_match: constraints["budget_total"] = int(man_match.group(1)) * 10000
     elif not constraints.get("budget_total"): constraints["budget_total"] = 300000
     if not constraints.get("origin"): constraints["origin"] = "서울"
     if not constraints.get("people"): constraints["people"] = 1
+    
+    # 테마 보정
+    if not constraints.get("theme"): constraints["theme"] = ["일반"]
+    elif isinstance(constraints["theme"], str): constraints["theme"] = [constraints["theme"]]
+        
     constraints["duration"] = f"{constraints.get('duration_nights', 1)}박{constraints.get('duration_days', 2)}일" 
+    
+    print(f"   📋 추출된 제약조건: {json.dumps(constraints, ensure_ascii=False)}")
     return {"constraints": constraints}
 
 def transport_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -206,27 +218,39 @@ def lodging_node(state: Dict[str, Any]) -> Dict[str, Any]:
         selected = min(cands, key=lambda x: x['estimated_cost']) if is_low else random.choice(cands)
     return {"lodging": {"selected": selected}}
 
-# 🌟 [핵심 변경] 숙소 좌표를 기반으로 10km 이내 관광지 검색
 def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "attraction" and state.get("attractions", {}).get("selected_list"):
         return {"attractions": state.get("attractions")}
     
-    print("\n🎡 [Attraction] 숙소 반경 10km 이내 관광지 탐색")
+    print("\n🎡 [Attraction] 숙소 반경 10km 이내 맞춤형 테마 관광지 탐색")
     dest = state.get("constraints", {}).get("destination", "").strip()
-    themes = state.get("constraints", {}).get("theme", []) 
+    themes = state.get("constraints", {}).get("theme", ["일반"]) 
     lodging = state.get("lodging", {}).get("selected", {})
     
     lx, ly = lodging.get('x'), lodging.get('y')
-    radius = 10000 if lx and ly else None # 10km
+    radius = 10000 if lx and ly else None
 
+    # 🌟 [핵심 변경] 테마에 따른 키워드 맵핑 및 제약 완화
     theme_kw = "가볼만한곳"
-    if themes:
-        if "역사" in themes[0]: theme_kw = "역사 유적지"
-        elif "자연" in themes[0]: theme_kw = "자연명소"
-        elif "문화" in themes[0]: theme_kw = "박물관"
-        elif "액티비티" in themes[0]: theme_kw = "테마파크"
-        else: theme_kw = themes[0]
+    is_specific_theme = False
+    
+    main_theme = themes[0]
+    if "역사" in main_theme: 
+        theme_kw = "역사 유적지 문화재"
+        is_specific_theme = True
+    elif "자연" in main_theme: 
+        theme_kw = "자연명소 공원"
+        is_specific_theme = True
+    elif "문화" in main_theme: 
+        theme_kw = "박물관 미술관"
+        is_specific_theme = True
+    elif "액티비티" in main_theme: 
+        theme_kw = "테마파크 체험"
+        is_specific_theme = True
+    elif main_theme != "일반":
+        theme_kw = main_theme
+        is_specific_theme = True
 
     places, seen = [], set()
     def add_p(new_p):
@@ -234,14 +258,25 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if p['place_name'] not in seen: seen.add(p['place_name']); places.append(p)
 
     kw = f"{dest} {theme_kw}"
-    # 숙소 좌표가 있으면 반경 파라미터가 자동으로 들어감
-    if res1 := fetch_kakao_places(kw, category_code="AT4", size=10, x=lx, y=ly, radius=radius): add_p(res1)
+    
+    # 🌟 테마가 명확하면(예: 역사) 카테고리(AT4) 제한을 풀고 키워드 위주로 넓게 검색합니다.
+    if is_specific_theme:
+        if res1 := fetch_kakao_places(kw, size=15, x=lx, y=ly, radius=radius): add_p(res1)
+    else:
+        if res1 := fetch_kakao_places(kw, category_code="AT4", size=15, x=lx, y=ly, radius=radius): add_p(res1)
+    
+    # 부족할 경우 문화시설(CT1) 및 일반 검색 추가 수행
     if len(places) < 2 and (res2 := fetch_kakao_places(kw, category_code="CT1", size=10, x=lx, y=ly, radius=radius)): add_p(res2)
     if len(places) < 2 and (res3 := fetch_kakao_places(f"{dest} 가볼만한곳", category_code="AT4", size=10, x=lx, y=ly, radius=radius)): add_p(res3)
 
     selected_list = []
     if places:
-        for p in places[:2]:
+        # 상위 10개 풀에서 랜덤하게 2개를 뽑아 지나친 밀집을 방지
+        candidates_pool = places[:10]
+        random.shuffle(candidates_pool)
+        candidates = candidates_pool[:2]
+        
+        for p in candidates:
             try:
                 res = requests.get("https://serpapi.com/search", params={"engine": "google", "q": f"{dest} {p['place_name']} 성인 입장료", "api_key": SERP_API_KEY, "hl": "ko", "gl": "kr"}, timeout=10).json()
                 context = " ".join([str(res.get("answer_box", "")), str(res.get("knowledge_graph", ""))] + [o.get("snippet", "") for o in res.get("organic_results", [])[:2]])
@@ -258,7 +293,6 @@ def attraction_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return {"attractions": {"selected_list": selected_list}}
 
-# 🌟 [핵심 변경] 숙소 좌표를 기반으로 10km 이내 음식점 검색
 def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = state.get("react_decision", "")
     if state.get("retry_count", 0) > 0 and decision != "food" and state.get("food", {}).get("selected_list"):
@@ -269,22 +303,27 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
     lodging = state.get("lodging", {}).get("selected", {})
     
     lx, ly = lodging.get('x'), lodging.get('y')
-    radius = 10000 if lx and ly else None # 10km
+    radius = 10000 if lx and ly else None
 
     target = 7 if "2박" in state.get("constraints", {}).get("duration", "") else 4
     kws = [f"{dest} 기사식당", f"{dest} 국밥"] if decision == "food" else [f"{dest} 맛집"]
     
     places = []
     for kw in kws:
-        res = fetch_kakao_places(kw, category_code="FD6", size=10, x=lx, y=ly, radius=radius)
+        res = fetch_kakao_places(kw, category_code="FD6", size=15, x=lx, y=ly, radius=radius)
         valid = [p for p in res if "카페" not in p.get('category_name','')]
         if valid: places = valid; break 
-    if not places: places = fetch_kakao_places(f"{dest} 식당", category_code="FD6", size=10, x=lx, y=ly, radius=radius)
+    if not places: places = fetch_kakao_places(f"{dest} 식당", category_code="FD6", size=15, x=lx, y=ly, radius=radius)
 
     selected_list = []
     if places:
         processed = []
-        for p in places[:7]:
+        
+        # 맛집도 약간 섞어서 지나치게 한 동네에 뭉치는 것을 방지
+        candidates_pool = places[:12]
+        if decision != "food": random.shuffle(candidates_pool)
+        
+        for p in candidates_pool[:7]:
             try:
                 res = requests.get("https://serpapi.com/search", params={"engine": "google", "q": f"{dest} {p['place_name']} 대표 메뉴 가격", "api_key": SERP_API_KEY, "hl": "ko", "gl": "kr"}, timeout=10).json()
                 context = " ".join([str(res.get("knowledge_graph", ""))] + [o.get("snippet", "") for o in res.get("organic_results", [])[:3]])
@@ -293,9 +332,10 @@ def food_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 fp = min(reals) if reals else (8000 if decision=="food" else 15000)
             except: fp = 8000 if decision=="food" else 15000
             processed.append({"name": p['place_name'], "type": p.get('category_name', '').split(' > ')[-1], "estimated_cost": fp, "x": p.get('x'), "y": p.get('y')})
+        
         if decision == "food": processed.sort(key=lambda x: x['estimated_cost'])
-        else: random.shuffle(processed)
         selected_list = processed[:target]
+        
     return {"food": {"selected_list": selected_list}}
 
 def integrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -414,5 +454,5 @@ workflow.add_conditional_edges("react", lambda x: x.get("react_decision", "plann
 app = workflow.compile()
 
 if __name__ == "__main__":
-    my_request = sys.argv[1] if len(sys.argv) > 1 else "부산 1박2일 70만원 자연"
+    my_request = sys.argv[1] if len(sys.argv) > 1 else "부산 1박2일 70만원 역사명소 위주"
     app.invoke({"user_query": my_request, "retry_count": 0})
