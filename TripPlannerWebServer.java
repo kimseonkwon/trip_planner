@@ -37,6 +37,10 @@ public class TripPlannerWebServer {
                             input[type="text"]#prompt { width: 100%; padding: 14px; border: 1px solid #ddd; border-radius: 10px; box-sizing: border-box; font-size: 15px; background: #fafafa; transition: 0.2s; }
                             input[type="text"]#prompt:focus { background: #fff; border-color: #007bff; outline: none; box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
                             
+                            /* 🌟 달력 CSS 추가 */
+                            .date-container { display: flex; gap: 10px; align-items: center; }
+                            input[type="date"] { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-family: inherit; font-size: 14px; color: #333; background: #fafafa; }
+                            
                             .radio-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
                             .radio-group label { padding: 8px 16px; background: #f1f3f5; border-radius: 20px; font-size: 14px; cursor: pointer; transition: 0.2s; color: #555; font-weight: 500; }
                             .radio-group input[type="radio"] { display: none; }
@@ -48,7 +52,7 @@ public class TripPlannerWebServer {
                             
                             .loader { display: none; text-align: center; margin-top: 20px; color: #3b82f6; font-weight: bold; }
                             
-                            /* 🌟 예쁜 결과창 UI CSS */
+                            /* 결과창 UI CSS */
                             #planOutput { display: none; margin-top: 30px; animation: fadeIn 0.5s ease; }
                             @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
                             
@@ -63,9 +67,10 @@ public class TripPlannerWebServer {
                             .day-wrapper { margin-bottom: 35px; }
                             .day-title { font-size: 18px; font-weight: 800; color: #333; margin-bottom: 15px; display: flex; align-items: center; }
                             .day-title::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
-                            .day-1::before { background: #ff4d4d; box-shadow: 0 0 0 4px rgba(255, 77, 77, 0.2); }
+                            .day-1::before { background: #ef4444; box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.2); }
                             .day-2::before { background: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2); }
                             .day-3::before { background: #10b981; box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2); }
+                            .day-4::before { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2); }
                             
                             .timeline { border-left: 2px solid #e2e8f0; margin-left: 15px; padding-left: 25px; position: relative; }
                             .timeline-item { position: relative; margin-bottom: 20px; }
@@ -95,15 +100,21 @@ public class TripPlannerWebServer {
                                 <div class="section-title" style="margin-top:0;">💭 특별히 원하는 점이 있나요?</div>
                                 <input type="text" id="prompt" placeholder="예: 바다가 보이는 숙소, 유명한 빵집 추가해줘" />
                                 
-                                <div class="section-title">🗓️ 숙박 일정</div>
+                                <div class="section-title">🗓️ 여행 날짜</div>
+                                <div class="date-container">
+                                    <input type="date" id="start_date">
+                                    <span style="color:#888; font-weight:bold;">~</span>
+                                    <input type="date" id="end_date">
+                                </div>
+
+                                <div class="section-title">🚗 교통편</div>
                                 <div class="radio-group">
-                                    <input type="radio" name="duration" id="d1" value="1박 2일" checked onclick="toggleCustom('duration', false)">
-                                    <label for="d1">1박 2일</label>
-                                    <input type="radio" name="duration" id="d2" value="2박 3일" onclick="toggleCustom('duration', false)">
-                                    <label for="d2">2박 3일</label>
-                                    <input type="radio" name="duration" id="d_custom" value="custom" onclick="toggleCustom('duration', true)">
-                                    <label for="d_custom">직접입력</label>
-                                    <input type="text" id="duration_input" class="custom-input" placeholder="예: 3박 4일">
+                                    <input type="radio" name="transport" id="tr_train" value="기차" checked>
+                                    <label for="tr_train">기차(KTX)</label>
+                                    <input type="radio" name="transport" id="tr_bus" value="고속버스">
+                                    <label for="tr_bus">고속버스</label>
+                                    <input type="radio" name="transport" id="tr_car" value="자가용">
+                                    <label for="tr_car">자가용</label>
                                 </div>
 
                                 <div class="section-title">👨‍👩‍👧‍👦 인원수</div>
@@ -112,6 +123,8 @@ public class TripPlannerWebServer {
                                     <label for="p1">1명</label>
                                     <input type="radio" name="people" id="p2" value="2명" onclick="toggleCustom('people', false)">
                                     <label for="p2">2명</label>
+                                    <input type="radio" name="people" id="p3" value="3명" onclick="toggleCustom('people', false)">
+                                    <label for="p3">3명</label>
                                     <input type="radio" name="people" id="p_custom" value="custom" onclick="toggleCustom('people', true)">
                                     <label for="p_custom">직접입력</label>
                                     <input type="number" id="people_input" class="custom-input" placeholder="명">
@@ -155,9 +168,18 @@ public class TripPlannerWebServer {
                             let markers = [];
                             let polylines = [];
 
+                            // 🌟 페이지 로드 시 오늘~내일 날짜 자동 세팅
+                            window.onload = () => {
+                                let today = new Date();
+                                let tmrw = new Date(today);
+                                tmrw.setDate(tmrw.getDate() + 1);
+                                document.getElementById('start_date').value = today.toISOString().split('T')[0];
+                                document.getElementById('end_date').value = tmrw.toISOString().split('T')[0];
+                            };
+
                             kakao.maps.load(() => {
                                 map = new kakao.maps.Map(document.getElementById('map'), {
-                                    center: new kakao.maps.LatLng(35.836, 129.213), // 경주/부산 중간
+                                    center: new kakao.maps.LatLng(35.836, 129.213),
                                     level: 8
                                 });
                             });
@@ -167,10 +189,29 @@ public class TripPlannerWebServer {
                             }
 
                             async function generatePlan() {
-                                let baseText = document.getElementById('prompt').value || "경주 여행 짜줘";
+                                let baseText = document.getElementById('prompt').value || "여행 짜줘";
                                 
-                                let durVal = document.querySelector('input[name="duration"]:checked').value;
-                                if(durVal === 'custom') durVal = (document.getElementById('duration_input').value || "1박 2일");
+                                // 🌟 달력 날짜 차이 계산하여 N박 M일 생성
+                                let startDateStr = document.getElementById('start_date').value;
+                                let endDateStr = document.getElementById('end_date').value;
+                                
+                                if (!startDateStr || !endDateStr) {
+                                    alert("출발일과 도착일을 모두 선택해주세요."); return;
+                                }
+                                
+                                let startDate = new Date(startDateStr);
+                                let endDate = new Date(endDateStr);
+                                let timeDiff = endDate.getTime() - startDate.getTime();
+                                let nights = Math.ceil(timeDiff / (1000 * 3600 * 24));
+                                
+                                if (nights < 0) {
+                                    alert("도착일은 출발일 이후여야 합니다."); return;
+                                }
+                                let days = nights + 1;
+                                let durVal = `${nights}박 ${days}일`;
+
+                                let transportVal = document.querySelector('input[name="transport"]:checked').value;
+
                                 let peopleVal = document.querySelector('input[name="people"]:checked').value;
                                 if(peopleVal === 'custom') peopleVal = (document.getElementById('people_input').value || "1") + "명";
                                 let budgetVal = document.querySelector('input[name="budget"]:checked').value;
@@ -178,8 +219,9 @@ public class TripPlannerWebServer {
                                 let themeVal = document.querySelector('input[name="theme"]:checked').value;
                                 if(themeVal === 'custom') themeVal = document.getElementById('theme_input').value || "일반";
 
-                                const combinedPrompt = `${baseText}. 조건: 일정 ${durVal}, 인원수 ${peopleVal}, 예산 ${budgetVal}, 테마 ${themeVal}`;
-                                
+                                const combinedPrompt = `${baseText}. 조건: 일정 ${durVal}, 교통편 ${transportVal}, 인원수 ${peopleVal}, 예산 ${budgetVal}, 테마 ${themeVal}`;
+                                console.log("전달되는 프롬프트:", combinedPrompt);
+
                                 document.getElementById('loader').style.display = 'block';
                                 document.getElementById('planOutput').style.display = 'none';
                                 
@@ -194,16 +236,12 @@ public class TripPlannerWebServer {
                                     const resultText = await res.text();
                                     
                                     if(resultText.includes('===PLAN_DATA===')) {
-                                        // 파이썬 JSON 데이터 파싱
                                         const pParts = resultText.split('===PLAN_DATA===')[1].split('===MAP_DATA===');
                                         const planData = JSON.parse(pParts[0].trim());
                                         const mParts = pParts[1].split('===PATH_DATA===');
                                         const markerData = JSON.parse(mParts[0].trim());
                                         const pathData = JSON.parse(mParts[1].trim());
 
-                                        // ==========================================
-                                        // 🌟 1. 세련된 UI 렌더링 시작
-                                        // ==========================================
                                         let html = `
                                             <div class="plan-header">
                                                 <h2>🎉 ${planData.meta.dest} ${planData.meta.nights}박 ${planData.meta.days}일 코스</h2>
@@ -218,15 +256,13 @@ public class TripPlannerWebServer {
                                             html += `<div class="alert-box">${planData.meta.warning}</div>`;
                                         }
 
-                                        // 타임라인 그리기
                                         planData.timeline.forEach(day => {
-                                            let dayClass = day.day > 3 ? 'day-3' : 'day-' + day.day;
+                                            let dayClass = day.day > 4 ? 'day-4' : 'day-' + day.day;
                                             html += `
                                             <div class="day-wrapper">
                                                 <div class="day-title ${dayClass}">Day ${day.day} 일정</div>
                                                 <div class="timeline">
                                             `;
-                                            
                                             day.schedule.forEach(item => {
                                                 html += `
                                                     <div class="timeline-item">
@@ -242,7 +278,6 @@ public class TripPlannerWebServer {
                                             html += `</div></div>`;
                                         });
 
-                                        // 세부 정보(가격, 링크) 추가
                                         html += `<div class="details-section"><div class="day-title">🔍 장소별 세부 정보</div>`;
                                         planData.details.forEach(item => {
                                             const urlBtn = item.url ? `<a href="${item.url}" target="_blank" class="d-link">상세보기 ↗</a>` : '';
@@ -262,11 +297,7 @@ public class TripPlannerWebServer {
                                         
                                         document.getElementById('planOutput').innerHTML = html;
 
-                                        // ==========================================
-                                        // 🌟 2. 지도 마커 및 화살표 렌더링
-                                        // ==========================================
                                         const bounds = new kakao.maps.LatLngBounds();
-                                        
                                         markerData.forEach(item => {
                                             const pos = new kakao.maps.LatLng(item.lat, item.lng);
                                             const marker = new kakao.maps.Marker({position: pos, map: map});
@@ -276,13 +307,10 @@ public class TripPlannerWebServer {
                                             kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
                                         });
 
-                                        // 날짜별 선 색상: 1일차(빨강), 2일차(파랑), 3일차(초록), 4일차(주황)...
                                         const dayColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
-
                                         for (let i = 0; i < pathData.length - 1; i++) {
                                             const p1 = pathData[i];
                                             const p2 = pathData[i+1];
-                                            // 날짜가 바뀌는 구간은 선을 긋지 않음 (ex: 1일차 숙소 -> 2일차 첫 식당)
                                             if (p1.day !== p2.day) continue;
 
                                             const startPos = new kakao.maps.LatLng(p1.lat, p1.lng);
@@ -300,7 +328,6 @@ public class TripPlannerWebServer {
                                             polyline.setMap(map);
                                             polylines.push(polyline);
                                         }
-
                                         if (markerData.length > 0) map.setBounds(bounds);
                                     } else {
                                         document.getElementById('planOutput').innerText = resultText;
@@ -352,9 +379,7 @@ public class TripPlannerWebServer {
             while ((line = reader.readLine()) != null) { output.append(line).append("\n"); }
             process.waitFor();
             String fullLog = output.toString();
-            // 🌟 텍스트에서 JSON 블록만 정확히 잘라냄
-            return fullLog.contains("===PLAN_DATA===") ? 
-                   fullLog.substring(fullLog.indexOf("===PLAN_DATA===")) : fullLog;
+            return fullLog.contains("===PLAN_DATA===") ? fullLog.substring(fullLog.indexOf("===PLAN_DATA===")) : fullLog;
         } catch (Exception e) { return "에러: " + e.getMessage(); }
     }
 }

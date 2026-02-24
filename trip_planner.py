@@ -118,7 +118,7 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     당신은 여행 플래너의 Supervisor입니다.
     사용자의 요청을 분석하여 JSON으로 추출하세요.
     [사용자 요청] "{query}"
-    [규칙] 1. origin 2. destination 3. budget_total(숫자) 4. people(숫자) 5. duration_nights 6. duration_days 7. theme(배열)
+    [규칙] 1. origin 2. destination 3. budget_total(숫자) 4. people(숫자) 5. duration_nights 6. duration_days 7. theme(배열) 8. transport(문자열: 기차, 고속버스, 자가용 중 택1)
     """
     response = llm.invoke(prompt)
     constraints = extract_json(response.content)
@@ -131,6 +131,11 @@ def supervisor_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not constraints.get("people"): constraints["people"] = 1
     if not constraints.get("theme"): constraints["theme"] = ["일반"]
     elif isinstance(constraints["theme"], str): constraints["theme"] = [constraints["theme"]]
+    
+    # 🌟 교통편 안전망
+    if "자가용" in query: constraints["transport"] = "자가용"
+    elif "고속버스" in query or "버스" in query: constraints["transport"] = "고속버스"
+    else: constraints["transport"] = constraints.get("transport", "기차")
         
     dur_match = re.search(r'(\d+)박\s*(\d+)일', query)
     if dur_match:
@@ -147,10 +152,12 @@ def transport_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return {"transport": state.get("transport")}
     c = state.get("constraints", {})
     dest, origin = c.get("destination", "부산").strip(), c.get("origin", "서울").strip() 
-    mode = "고속버스" if state.get("revision_request", "") and decision == "transport" else "KTX"
+    mode = c.get("transport", "기차")
     selected = {}
     
-    if mode == "KTX":
+    if mode == "자가용":
+        selected = {"type": "자가용", "name": f"{origin} ↔ {dest} 자가용 이동", "cost": 50000} # 주유비/톨게이트비 평균치
+    elif mode == "KTX" or mode == "기차":
         dep_id = fetch_station_code(origin, CITY_CODES.get(origin[:2], "11")) or STATION_DB["기차"].get(origin)
         arr_id = fetch_station_code(dest, CITY_CODES.get(dest[:2], "21")) or STATION_DB["기차"].get(dest)
         if dep_id and arr_id:
@@ -300,7 +307,8 @@ def integrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     trans, lodg = state.get("transport", {}).get("selected", {}), state.get("lodging", {}).get("selected", {})
     foods, attrs = state.get("food", {}).get("selected_list", []), state.get("attractions", {}).get("selected_list", [])
 
-    tc = trans.get("cost", 0) * (1 if "자차" in trans.get("type", "") else people * 2)
+    # 🌟 자가용인 경우 사람 수가 아닌 '차량 1대' 기준으로 왕복 계산
+    tc = trans.get("cost", 0) * (1 if "자가용" in trans.get("type", "") else people * 2)
     lc = lodg.get("estimated_cost", 0) * ((people + 1) // 2) * nights
     fc = sum(f.get('estimated_cost', 0) for f in foods) * people
     ac = sum(a.get('estimated_cost', 0) for a in attrs) * people
@@ -332,7 +340,6 @@ def calculate_distance(lat1, lon1, lat2, lon2):
         return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
     except: return 0
 
-# 🌟 [완전 개편] UI 생성을 위한 구조화된 JSON 데이터 출력
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     c = state.get("constraints", {})
     dest = c.get("destination", "부산")
@@ -363,7 +370,6 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             cands.sort(key=lambda i: calculate_distance(cur['y'], cur['x'], i['y'], i['x']))
         return cands.pop(0)
 
-    # 1. PLAN JSON 조립
     plan_data = {
         "meta": {
             "dest": dest, "origin": origin, "nights": nights, "days": days,
@@ -371,51 +377,55 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "themes": ", ".join(themes),
             "breakdown": breakdown,
             "lodging_name": lodging.get('name', '숙소 미정'),
-            "warning": "⚠️ [예산 초과 알림] 설정하신 예산보다 예상 비용이 높습니다. 예산을 상향 조정해 보는 것은 어떨까요?" if total_cost > budget else ""
+            "warning": "⚠️ [예산 초과 알림] 설정하신 예산보다 예상 비용이 높습니다. 예산을 조금 더 늘려보는 건 어떨까요?" if total_cost > budget else ""
         },
         "timeline": [],
         "details": []
     }
 
     cur = {} 
-    # 2. 타임라인 생성
+    
+    # 🌟 교통편 아이콘 동적 설정
+    t_icon = "🚗" if "자가용" in transport.get('type', '') else ("🚌" if "버스" in transport.get('type', '') else "🚄")
+    
+    # 타임라인 생성
     for d in range(1, days + 1):
         day_schedule = []
+        
+        # 아침
         if d == 1:
-            day_schedule.append({"time": "10:00", "icon": "🚄", "title": f"{dest} 도착 및 일정 시작", "desc": f"{origin} ↔ {dest} {transport.get('name', '')}"})
+            day_schedule.append({"time": "10:00", "icon": t_icon, "title": f"{dest} 도착 및 일정 시작", "desc": f"{origin} ↔ {dest} ({transport.get('name', '')})"})
         elif d == days:
             day_schedule.append({"time": "10:00", "icon": "🏨", "title": "숙소 체크아웃", "desc": lodging.get('name', '숙소')})
         else:
             day_schedule.append({"time": "10:00", "icon": "🏨", "title": "일정 시작", "desc": "숙소 출발"})
             
+        # 점심, 관광, 저녁 추가
         if f := get_nearest(cur, foods_temp):
             day_schedule.append({"time": "11:30", "icon": "🍽️", "title": "점심 식사", "desc": f['name']}); cur = f; add_to_path(f, d)
-            
         if a := get_nearest(cur, attrs_temp):
             day_schedule.append({"time": "14:00", "icon": "🎡", "title": "오후 관광", "desc": a['name']}); cur = a; add_to_path(a, d)
-            
         if f := get_nearest(cur, foods_temp):
             t_title = "이른 저녁" if d == days else "저녁 식사"
             t_time = "17:00" if d == days else "18:00"
             day_schedule.append({"time": t_time, "icon": "🍽️", "title": t_title, "desc": f['name']}); cur = f; add_to_path(f, d)
                 
-        if d == 1:
+        # 저녁/종료
+        if d == days:
+            day_schedule.append({"time": "19:00", "icon": t_icon, "title": f"{dest} 출발 및 여행 종료", "desc": "안녕히 가세요!"})
+        elif d == 1:
             day_schedule.append({"time": "20:00", "icon": "🏨", "title": "숙소 체크인", "desc": lodging.get('name')}); cur = lodging; add_to_path(lodging, d)
-        elif d < days:
+        else:
             day_schedule.append({"time": "20:00", "icon": "🏨", "title": "숙소 복귀 및 휴식", "desc": ""}); cur = lodging; add_to_path(lodging, d)
-        elif d == days:
-            day_schedule.append({"time": "19:00", "icon": "🚄", "title": f"{dest} 출발 및 여행 종료", "desc": ""})
 
         plan_data["timeline"].append({"day": d, "schedule": day_schedule})
 
-    # 3. 상세 정보 생성 (가격 및 URL)
     plan_data["details"].append({"icon": "🏨", "category": lodging.get('type','숙소'), "name": lodging.get('name'), "cost": lodging.get('estimated_cost',0), "url": lodging.get('url', '')})
     for a in all_attrs:
         plan_data["details"].append({"icon": "🎡", "category": a.get('type','관광지'), "name": a['name'], "cost": a.get('estimated_cost',0), "url": a.get('url', '')})
     for f in all_foods:
         plan_data["details"].append({"icon": "🍽️", "category": f.get('type','식당'), "name": f['name'], "cost": f.get('estimated_cost',0), "url": f.get('url', '')})
 
-    # 지도 핀용 데이터
     map_data = []
     if lodging.get('x'): map_data.append({"name": lodging['name'], "type": "🏨 숙소", "lat": float(lodging['y']), "lng": float(lodging['x'])})
     for f in all_foods:
@@ -423,7 +433,6 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     for a in all_attrs:
         if a.get('x'): map_data.append({"name": a['name'], "type": "🎡 관광지", "lat": float(a['y']), "lng": float(a['x'])})
 
-    # 🌟 자바스크립트로 출력
     print("===PLAN_DATA===")
     print(json.dumps(plan_data, ensure_ascii=False))
     print("===MAP_DATA===")
