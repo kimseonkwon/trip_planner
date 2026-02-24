@@ -317,20 +317,82 @@ def integrator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state["integrated"] = {"total_cost": total, "breakdown": {"transport": tc, "lodging": lc, "food": fc, "attraction": ac}}
     return state
 
+import json
+
+
+
+
 def validation_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    b = state.get("constraints", {}).get("budget_total", 0)
-    t = state.get("integrated", {}).get("total_cost", 0)
-    state["validation"] = {"passed": (b - t >= 0), "reason": "Budget Exceeded" if b - t < 0 else "OK"}
+    # 1. 제약 조건 및 생성된 계획 추출
+    constraints = state.get("constraints", {})
+    itinerary = state.get("integrated", {}).get("itinerary", [])
+    total_cost = state.get("integrated", {}).get("total_cost", 0)
+    
+    # 2. LLM에게 검토 요청을 위한 프롬프트 작성
+    prompt = f"""
+    당신은 여행 계획 검수관입니다. 아래의 [제약 조건]과 [생성된 계획]을 비교하여 타당성을 검토하세요.
+    
+    [제약 조건]
+    - 인원수: {constraints.get('people_count')}명
+    - 총 예산: {constraints.get('budget_total')}원
+    - 여행 테마: {constraints.get('theme')}
+    - 기타 요구사항: {constraints.get('requirements')}
+    
+    [생성된 계획]
+    - 현재 총 비용: {total_cost}원
+    - 상세 일정: {itinerary}
+    
+    [결과 양식]
+    반드시 아래 JSON 형식으로만 답변하세요:
+    {{
+        "passed": true 또는 false,
+        "reason": "통과했다면 'OK', 실패했다면 구체적인 이유",
+        "feedback": "실패 시 planner가 수정해야 할 구체적인 지침"
+    }}
+    """
+    
+    try:
+        response = llm.invoke(prompt)
+        # JSON 부분만 추출 (Ollama 답변에 설명이 섞일 경우 대비)
+        start_idx = response.find('{')
+        end_idx = response.rfind('}') + 1
+        result = json.loads(response[start_idx:end_idx])
+    except Exception as e:
+        # 파싱 에러 발생 시 기본 실패 처리
+        result = {"passed": False, "reason": "Validation Error", "feedback": str(e)}
+
+    # state 업데이트
+    state["validation"] = result
     return state
 
 def react_decision_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    tried = state.get("tried_steps", [])
-    if state.get("retry_count", 0) >= 4: return {"react_decision": "planner"}
-    costs = state.get("integrated", {}).get("breakdown", {})
-    available = {k: v for k, v in costs.items() if k not in tried}
-    target = max(available, key=available.get) if available else "planner"
-    return {"react_decision": target, "retry_count": state.get("retry_count", 0) + 1, "tried_steps": tried + [target]}
+    validation = state.get("validation", {})
+    retry_count = state.get("retry_count", 0)
+    
+    # 1. 검증 통과 시 종료
+    if validation.get("passed"):
+        return {"react_decision": "end"}
+    
+    # 2. 재시도 횟수 초과 시 중단 또는 최종 플래너로 이동
+    if retry_count >= 2:
+        return {"react_decision": "planner", "feedback": "최대 재시도 횟수 초과. 현재까지의 최선안을 도출하세요."}
+    
+    # 3. LLM의 피드백 분석 후 타겟 결정
+    # 예: 피드백에 '예산' 언급이 있으면 비용 조정 노드로, '일정' 언급이 있으면 경로 최적화 노드로.
+    feedback = validation.get("feedback", "").lower()
+    
+    if "예산" in feedback or "비용" in feedback:
+        target = "cost_optimizer" # 비용을 줄이는 특정 노드가 있다면
+    elif "테마" in feedback or "일정" in feedback:
+        target = "planner" # 전체 일정을 다시 짜야 하는 경우
+    else:
+        target = "planner" # 기본값
 
+    return {
+        "react_decision": target, 
+        "retry_count": retry_count + 1,
+        "feedback_to_agent": validation.get("feedback") # 다음 노드에 피드백 전달
+    }
 def calculate_distance(lat1, lon1, lat2, lon2):
     try:
         R = 6371  
